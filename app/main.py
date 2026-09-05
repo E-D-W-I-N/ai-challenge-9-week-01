@@ -105,9 +105,111 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
-# --- ручной чат: та же модель, те же метрики, свободный ввод пользователя ---
+# --- разбор пользовательского ввода: и тело /api/chat, и overrides у /api/run ---
 
 _ROLES = ("system", "user", "assistant")
+
+# Что клиент вправе переопределить у колонки сценария. Всё остальное —
+# messages, label, depends_on, extra_body — принадлежит автору дня: подмена
+# label ломает сопоставление колонок в UI, подмена messages — сам сценарий.
+_OVERRIDABLE = ("model", "temperature", "max_tokens")
+
+
+def _optional_field(payload: dict, name: str, types: tuple, hint: str, where: str = ""):
+    """Необязательное поле: либо null, либо нужного типа. Иначе 400 с текстом.
+
+    bool отбрасывается отдельно: в Python True — это int, и «temperature: true»
+    иначе доехало бы до провайдера.
+    """
+    value = payload.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, types):
+        raise HTTPException(status_code=400, detail=f"{where}{name}: {hint}")
+    return value
+
+
+def _model_field(payload: dict, where: str = "") -> str:
+    """id модели: непустая строка. Пусто — 400, а не падение внутри вызова."""
+    value = payload.get("model")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    detail = (
+        f"{where}model: id модели OpenRouter непустой строкой"
+        if where
+        else "model обязателен: id модели OpenRouter строкой"
+    )
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _sampling_fields(payload: dict, where: str = "") -> dict:
+    """temperature и max_tokens — общие для тела чата и для overrides."""
+    temperature = _optional_field(payload, "temperature", (int, float), "число или null", where)
+    max_tokens = _optional_field(payload, "max_tokens", (int,), "целое число или null", where)
+    if max_tokens is not None and max_tokens <= 0:
+        raise HTTPException(
+            status_code=400, detail=f"{where}max_tokens: целое число больше нуля или null"
+        )
+    return {
+        "temperature": float(temperature) if temperature is not None else None,
+        "max_tokens": max_tokens,
+    }
+
+
+def _parse_overrides(raw: str, sessions: list[Session]) -> dict[str, dict]:
+    """Разбирает query-параметр overrides у /api/run.
+
+    Проверок ровно столько же, сколько у тела /api/chat, и теми же функциями:
+    кривой ввод обязан получить 400 с текстом, а не 500. До этой проверки
+    список вместо объекта ронял AttributeError, лишний ключ — TypeError
+    в Session(**fields), а «label» в патче молча переименовывал колонку.
+    """
+    if not raw:
+        return {}
+    try:
+        patch = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"overrides не JSON: {exc}") from exc
+    if not isinstance(patch, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="overrides: объект вида {«колонка»: {model, temperature, max_tokens}}",
+        )
+
+    labels = {session.label for session in sessions}
+    clean: dict[str, dict] = {}
+    for label, fields in patch.items():
+        where = f"overrides[«{label}»]."
+        if label not in labels:
+            raise HTTPException(
+                status_code=400, detail=f"overrides: колонки «{label}» нет в сценарии"
+            )
+        if not isinstance(fields, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{where[:-1]}: объект с полями {', '.join(_OVERRIDABLE)}",
+            )
+        unknown = [key for key in fields if key not in _OVERRIDABLE]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{where[:-1]}: менять можно только {', '.join(_OVERRIDABLE)}, "
+                    f"а не {', '.join(sorted(unknown))}"
+                ),
+            )
+
+        sampling = _sampling_fields(fields, where)
+        patched: dict = {}
+        # Берём только те поля, что клиент прислал: явный null снимает значение
+        # сценария, а отсутствие ключа его не трогает.
+        if "model" in fields:
+            patched["model"] = _model_field(fields, where)
+        for name in ("temperature", "max_tokens"):
+            if name in fields:
+                patched[name] = sampling[name]
+        clean[label] = patched
+    return clean
 
 
 def _chat_session(payload: dict) -> Session:
@@ -116,9 +218,7 @@ def _chat_session(payload: dict) -> Session:
     Все ошибки — 400 с текстом, который можно показать пользователю: стенд
     не должен отвечать 500 на кривой ввод.
     """
-    model = payload.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise HTTPException(status_code=400, detail="model обязателен: id модели OpenRouter строкой")
+    model = _model_field(payload)
 
     raw = payload.get("messages")
     if not isinstance(raw, list) or not raw:
@@ -143,32 +243,21 @@ def _chat_session(payload: dict) -> Session:
             )
         messages.append({"role": role, "content": content})
 
-    def optional(name: str, types: tuple, hint: str):
-        value = payload.get(name)
-        if value is None:
-            return None
-        if isinstance(value, bool) or not isinstance(value, types):
-            raise HTTPException(status_code=400, detail=f"{name}: {hint}")
-        return value
+    sampling = _sampling_fields(payload)
 
-    temperature = optional("temperature", (int, float), "число или null")
-    max_tokens = optional("max_tokens", (int,), "целое число или null")
-    if max_tokens is not None and max_tokens <= 0:
-        raise HTTPException(status_code=400, detail="max_tokens: целое число больше нуля или null")
-
-    stop = optional("stop", (list,), "список строк или null")
+    stop = _optional_field(payload, "stop", (list,), "список строк или null")
     if stop is not None and not all(isinstance(x, str) for x in stop):
         raise HTTPException(status_code=400, detail="stop: список строк или null")
 
-    response_format = optional("response_format", (dict,), "объект или null")
-    extra_body = optional("extra_body", (dict,), "объект или null") or {}
+    response_format = _optional_field(payload, "response_format", (dict,), "объект или null")
+    extra_body = _optional_field(payload, "extra_body", (dict,), "объект или null") or {}
 
     return Session(
         label=str(payload.get("label") or "chat"),
-        model=model.strip(),
+        model=model,
         messages=messages,
-        temperature=float(temperature) if temperature is not None else None,
-        max_tokens=max_tokens,
+        temperature=sampling["temperature"],
+        max_tokens=sampling["max_tokens"],
         stop=stop or None,
         response_format=response_format,
         extra_body=extra_body,
@@ -413,13 +502,8 @@ async def run_scenario(
     if scenario is None:
         raise HTTPException(status_code=404, detail=f"сценарий {scenario_id} не найден")
 
-    # overrides: {"<session label>": {"model": "...", "temperature": 0.7}}
-    patch: dict = {}
-    if overrides:
-        try:
-            patch = json.loads(overrides)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"overrides не JSON: {exc}") from exc
+    # overrides: {"<label колонки>": {"model": "...", "temperature": 0.7}}
+    patch = _parse_overrides(overrides, scenario.sessions)
 
     sessions: list[Session] = []
     for session in scenario.sessions:
