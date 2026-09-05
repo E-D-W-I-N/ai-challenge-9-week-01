@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -321,8 +322,30 @@ async def _run_session(
             event.set()
 
 
+async def _cancel_sessions(tasks: list[asyncio.Task]) -> None:
+    """Гасит незавершённые сессии прогона.
+
+    Вызывается, когда SSE-поток закрылся: пользователь закрыл вкладку,
+    перезагрузил страницу или перевыбрал сценарий. Без этого задачи продолжают
+    качать ответ из OpenRouter до конца — стенд платит за токены, которых никто
+    не увидит, а на днях с provider.allow_fallbacks=false брошенный вызов ещё и
+    занимает провайдера, к которому пойдёт следующий дубль записи.
+    """
+    unfinished = [task for task in tasks if not task.done()]
+    if not unfinished:
+        return
+    for task in unfinished:
+        task.cancel()
+    # cancel() уже разослан: вызовы закроются, даже если нас самих отменяют
+    # и дождаться завершения не дадут.
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.gather(*unfinished, return_exceptions=True)
+
+
 @app.get("/api/run/{scenario_id}")
-async def run_scenario(scenario_id: str, overrides: str = "") -> StreamingResponse:
+async def run_scenario(
+    request: Request, scenario_id: str, overrides: str = ""
+) -> StreamingResponse:
     scenario = registry.get(scenario_id)
     if scenario is None:
         raise HTTPException(status_code=404, detail=f"сценарий {scenario_id} не найден")
@@ -353,33 +376,40 @@ async def run_scenario(scenario_id: str, overrides: str = "") -> StreamingRespon
         ready = {s.label: asyncio.Event() for s in sessions}
         started = time.monotonic()
 
-        yield _sse(
-            {
-                "event": "run_start",
-                "scenario": scenario.id,
-                "title": scenario.title,
-                "layout": scenario.layout,
-                "sessions": [_session_public(s) for s in sessions],
-            }
-        )
-
         tasks = [
             asyncio.create_task(_run_session(s, context_lengths, queue, results, ready))
             for s in sessions
         ]
-        pending = asyncio.ensure_future(asyncio.gather(*tasks))
+        # Всё, что ниже, — под finally: закрытие потока обязано погасить вызовы.
+        try:
+            yield _sse(
+                {
+                    "event": "run_start",
+                    "scenario": scenario.id,
+                    "title": scenario.title,
+                    "layout": scenario.layout,
+                    "sessions": [_session_public(s) for s in sessions],
+                }
+            )
 
-        while True:
-            if pending.done() and queue.empty():
-                break
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                yield ": keepalive\n\n"
-                continue
-            yield _sse(event)
+            while True:
+                # Клиент ушёл со страницы — дальше генерировать некому и незачем.
+                if await request.is_disconnected():
+                    return
+                if queue.empty() and all(task.done() for task in tasks):
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield _sse(event)
 
-        yield _sse({"event": "run_done", "wall_clock_ms": round((time.monotonic() - started) * 1000, 1)})
+            yield _sse(
+                {"event": "run_done", "wall_clock_ms": round((time.monotonic() - started) * 1000, 1)}
+            )
+        finally:
+            await _cancel_sessions(tasks)
 
     return StreamingResponse(
         event_stream(),
