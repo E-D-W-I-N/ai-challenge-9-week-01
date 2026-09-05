@@ -12,27 +12,36 @@
   --bubble-user: #1b2334;
   --bubble-user-line: #33507e;
   --bubble-system: #161922;
+  --radius: 14px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 * { box-sizing: border-box; }
 
+html, body { height: 100%; }
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  overflow: hidden;            /* страница целиком не скроллится ни по одной оси */
 }
 
+/* Каркас на всю высоту экрана: шапка + рабочая область. */
+.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+
 .topbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 22px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
-
-.topbar h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+.topbar h1 { font-size: 15px; margin: 0; min-width: 0; font-weight: 600; letter-spacing: .2px; }
 
 .badge {
   font-size: 12px;
@@ -40,20 +49,25 @@ body {
   border-radius: 999px;
   border: 1px solid var(--line);
   color: var(--muted);
+  white-space: nowrap;
 }
 .badge.ok { color: var(--ok); border-color: #2c5c40; }
 .badge.bad { color: var(--bad); border-color: #5c2c2c; }
 
-.layout { display: flex; min-height: calc(100vh - 53px); }
+.layout { flex: 1; display: flex; min-height: 0; }
+
+/* --- сайдбар --- */
 
 .sidebar {
-  width: 260px;
-  flex: 0 0 260px;
+  width: 250px;
+  flex: 0 0 250px;
   border-right: 1px solid var(--line);
-  padding: 18px 16px;
+  padding: 16px 14px;
   background: var(--panel);
+  overflow-y: auto;
+  min-height: 0;
 }
-.sidebar h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: .8px; margin: 0 0 12px; }
+.sidebar h2 { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .8px; margin: 0 0 12px; }
 
 .scenario-list { list-style: none; margin: 0; padding: 0; }
 .day-group + .day-group { margin-top: 14px; }
@@ -69,104 +83,141 @@ body {
 .day-scenarios { list-style: none; margin: 0; padding: 0; }
 .empty-hint { font-size: 13px; color: var(--muted); margin: 0; }
 .scenario-list li {
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
   cursor: pointer;
   border: 1px solid transparent;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   font-size: 14px;
+  transition: background .15s ease, border-color .15s ease;
 }
 .scenario-list li:hover { background: var(--panel-2); }
 .scenario-list li.active { background: var(--panel-2); border-color: var(--accent); }
 .scenario-list .sid { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
 
-.content { flex: 1; padding: 22px; overflow-x: auto; }
+.errors { margin-top: 16px; font-size: 11px; color: var(--bad); white-space: pre-wrap; }
 
-.briefing {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 18px 20px;
-  margin-bottom: 18px;
+/* --- рабочая область --- */
+
+.content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 16px;
+  overflow: hidden;
 }
-.briefing.empty { color: var(--muted); }
-.briefing h2 { margin: 0 0 10px; font-size: 20px; }
-.briefing p { margin: 0 0 10px; line-height: 1.55; }
-.watch { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--accent); }
 
-.controls { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+/* Шапка сценария: название, модели, «О сценарии», «Старт» — одной строкой. */
+.scenario-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.scenario-bar .hint { margin: 0; color: var(--muted); font-size: 14px; }
+.scenario-title { margin: 0; font-size: 17px; font-weight: 600; white-space: nowrap; }
+
+.pickers { display: flex; gap: 8px; flex: 1 1 260px; min-width: 0; flex-wrap: wrap; }
+.model-picker { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); min-width: 0; flex: 1 1 200px; max-width: 340px; }
+.picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 7px 9px;
+  font-size: 12px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
 
 button.start {
   background: var(--accent);
   color: #0b1220;
   border: 0;
-  border-radius: 8px;
-  padding: 10px 22px;
-  font-size: 15px;
+  border-radius: 10px;
+  padding: 9px 22px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
+  transition: filter .15s ease, opacity .15s ease;
 }
+button.start:hover:not(:disabled) { filter: brightness(1.08); }
 button.start:disabled { opacity: .5; cursor: default; }
 
-.model-picker { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.model-picker select {
-  background: var(--panel-2);
-  color: var(--text);
+button.ghost {
+  background: transparent;
+  color: var(--muted);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 8px;
-  min-width: 260px;
-  font-size: 12px;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .15s ease, border-color .15s ease;
 }
+button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(--accent); }
 
-.columns { display: flex; gap: 14px; align-items: stretch; }
-.columns.single .column { max-width: 900px; }
+/* description и watch_for — свёрнуты по умолчанию, раскрываются кнопкой. */
+.about {
+  flex: 0 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  max-height: 30vh;
+  overflow-y: auto;
+  animation: fade-in .18s ease;
+}
+.about p { margin: 0 0 8px; line-height: 1.55; font-size: 14px; }
+.about p:last-child { margin-bottom: 0; }
+.watch { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--accent); }
+
+/* --- колонки --- */
+
+.columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
 
 .column {
   flex: 1 1 0;
-  min-width: 300px;
+  min-width: 0;
+  min-height: 0;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.column header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.column header { flex: 0 0 auto; padding: 11px 14px; border-bottom: 1px solid var(--line); }
 .column h3 { margin: 0; font-size: 14px; }
 .column .note { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
-.column .modelid { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; margin-top: 4px; }
+.column .modelid { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; margin-top: 4px; overflow-wrap: anywhere; }
 
-.stats {
-  display: grid;
-  /* Узкая колонка split — две метрики в ряд, широкая single — сколько влезет:
-     цифры не должны разъезжаться от подписей на всю ширину. */
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 2px 14px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--panel-2);
-  font-size: 12px;
-}
-.stat { display: flex; justify-content: space-between; gap: 8px; }
-.stat .k { color: var(--muted); }
-.stat .v { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, monospace; }
-.stat .v.length { color: var(--warn); }
-.stat .v.err { color: var(--bad); }
-
-/* Лента чата: промпт виден до «Старта», ответ дописывается под ним. */
+/* Лента — единственное, что скроллится внутри колонки. */
 .chat {
-  flex: 1;
-  padding: 12px 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px;
   overflow-y: auto;
-  max-height: 46vh;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  scroll-behavior: smooth;
 }
 .chat .prompt { display: flex; flex-direction: column; gap: 10px; }
 
-.msg { font-size: 13px; line-height: 1.5; border-radius: 10px; }
+.msg { font-size: 13px; line-height: 1.55; border-radius: 12px; animation: msg-in .18s ease; }
 .msg .role {
   font-size: 10px;
   text-transform: uppercase;
@@ -202,32 +253,163 @@ button.start:disabled { opacity: .5; cursor: default; }
   background: var(--bubble-user);
   border: 1px solid var(--bubble-user-line);
   padding: 10px 12px;
+  align-self: flex-end;
+  max-width: 92%;
 }
 
 /* assistant — ответ модели, стримится сюда */
-.msg.assistant { border-left: 2px solid var(--accent); padding: 2px 0 2px 10px; }
+.msg.assistant { border-left: 2px solid var(--accent); padding: 2px 0 2px 12px; }
 
 .ph { color: var(--warn); background: rgba(251, 191, 36, .12); border-radius: 4px; padding: 0 3px; }
 .dep-hint { font-size: 11px; color: var(--warn); line-height: 1.4; }
-.column .status { padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
+
+.stats {
+  flex: 0 0 auto;
+  display: grid;
+  /* Узкая колонка — две метрики в ряд, широкая — сколько влезет. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 2px 14px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+.stat { display: flex; justify-content: space-between; gap: 8px; }
+.stat .k { color: var(--muted); }
+.stat .v { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, monospace; }
+.stat .v.length { color: var(--warn); }
+.stat .v.err { color: var(--bad); }
+
+.column .status { flex: 0 0 auto; padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
 .column .status.waiting { color: var(--warn); }
 .column .status.error { color: var(--bad); }
 
-.uniq { padding: 8px 14px; font-size: 12px; border-top: 1px solid var(--line); color: var(--accent); }
+.uniq { flex: 0 0 auto; padding: 8px 14px; font-size: 12px; border-top: 1px solid var(--line); color: var(--accent); }
+
+/* --- поле ввода --- */
+
+.composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  max-height: 160px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  transition: border-color .15s ease;
+}
+.composer-input::placeholder { color: var(--muted); }
+.composer-input:focus { outline: none; border-color: var(--accent); }
+.composer-input:disabled { opacity: .6; cursor: not-allowed; }
+
+.composer .send {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #0b1220;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter .15s ease, opacity .15s ease;
+}
+.composer .send:hover:not(:disabled) { filter: brightness(1.08); }
+.composer .send:disabled { opacity: .45; cursor: not-allowed; }
+.composer.locked .composer-input { border-style: dashed; }
+
+/* Пока идёт генерация — по колонке видно, что модель отвечает. */
+.column.busy .composer { opacity: .75; }
+.column.busy .status { color: var(--accent); }
+.column.busy .status::after {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+/* --- сводка --- */
 
 .summary {
+  flex: 0 0 auto;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 14px 18px;
-  margin-bottom: 16px;
+  border-radius: var(--radius);
+  padding: 12px 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px 22px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px 20px;
   font-size: 13px;
 }
 .summary .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
 .summary .v { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 15px; }
 
 .hidden { display: none; }
-.errors { margin-top: 16px; font-size: 11px; color: var(--bad); white-space: pre-wrap; }
+
+@keyframes msg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .msg, .about { animation: none; }
+  .chat { scroll-behavior: auto; }
+}
+
+/* --- адаптив --- */
+
+/* Ноутбук поуже: сайдбар не должен есть ширину у колонок. */
+@media (max-width: 1200px) {
+  .sidebar { width: 200px; flex-basis: 200px; }
+}
+
+/* Узкий экран: сайдбар — полоса сверху, колонки встают друг под друга. */
+@media (max-width: 860px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: auto;
+    flex: 0 0 auto;
+    display: flex;
+    gap: 14px;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .sidebar > h2 { display: none; }
+  .scenario-list { display: flex; gap: 14px; }
+  .day-group + .day-group { margin-top: 0; }
+  .day-title { border-bottom: 0; padding: 0 0 4px; }
+  .day-scenarios { display: flex; gap: 8px; }
+  .scenario-list li { margin-bottom: 0; white-space: nowrap; }
+  .errors { display: none; }
+
+  .content { padding: 12px; gap: 10px; }
+  .scenario-bar { gap: 8px; }
+  .scenario-title { white-space: normal; font-size: 16px; flex: 1 1 100%; }
+  .pickers { flex: 1 1 100%; }
+  .model-picker { flex: 1 1 100%; max-width: none; }
+  /* Одна колонка на экран: лента скроллится внутри, метрики и ввод видны. */
+  .columns { flex-direction: column; overflow-y: auto; scroll-snap-type: y proximity; }
+  .column { flex: 0 0 100%; scroll-snap-align: start; }
+  .about { max-height: 40vh; }
+  .summary { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+}
