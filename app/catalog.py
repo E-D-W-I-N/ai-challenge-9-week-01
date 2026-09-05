@@ -12,6 +12,9 @@ import httpx
 
 from .config import OPENROUTER_BASE_URL
 
+# Ручного сброса кэша нет намеренно: кнопки в UI не было, а каталог сам
+# обновится по TTL. Понадобится — вернём вместе с кнопкой, а не отдельным
+# параметром, который некому нажать.
 _TTL_SECONDS = 15 * 60
 _cache: dict[str, object] = {"fetched_at": 0.0, "models": []}
 
@@ -24,9 +27,9 @@ TEMPERATURE_CAPPED_PREFIXES = ("anthropic/",)
 EXCLUDED_SUFFIXES = (":free", ":batch")
 
 
-async def fetch_models(force: bool = False) -> list[dict]:
+async def fetch_models() -> list[dict]:
     now = time.monotonic()
-    if not force and _cache["models"] and now - float(_cache["fetched_at"]) < _TTL_SECONDS:
+    if _cache["models"] and now - float(_cache["fetched_at"]) < _TTL_SECONDS:
         return list(_cache["models"])  # type: ignore[arg-type]
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -73,7 +76,6 @@ def filter_models(
     requires: tuple[str, ...] = (),
     exclude_free: bool = False,
     exclude_temperature_capped: bool = False,
-    query: str = "",
 ) -> list[dict]:
     """Фильтры для дропдаунов UI.
 
@@ -90,14 +92,6 @@ def filter_models(
             continue
         if exclude_temperature_capped and model["temperature_capped"]:
             continue
-        if query and query.lower() not in model["id"].lower() and query.lower() not in model["name"].lower():
-            continue
         result.append(model)
     return result
 
-
-def context_length(models: list[dict], model_id: str) -> int:
-    for model in models:
-        if model["id"] == model_id:
-            return int(model.get("context_length") or 0)
-    return 0
