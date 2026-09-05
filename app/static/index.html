@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Challenge — стенд сценариев</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>AI Challenge — стенд сценариев</h1>
+    <div id="key-status" class="badge"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <h2>Сценарии</h2>
+      <ul id="scenario-list" class="scenario-list"></ul>
+      <div id="registry-errors" class="errors"></div>
+    </aside>
+
+    <section class="content">
+      <div id="briefing" class="briefing empty">
+        <p class="hint">Выберите сценарий слева.</p>
+      </div>
+
+      <div id="summary" class="summary hidden"></div>
+      <div id="columns" class="columns"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
