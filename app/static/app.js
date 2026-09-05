@@ -179,6 +179,69 @@ const STAT_FIELDS = [
   ["context_fill_pct", "контекст", (v) => (v === null || v === undefined ? "—" : v.toFixed(1) + " %")],
 ];
 
+const PLACEHOLDER = "{{depends_on}}";
+
+// Тело сообщения строится через textContent: промпт печатается как есть,
+// без интерпретации разметки. {{depends_on}} подсвечивается отдельным span.
+function messageBody(content) {
+  const body = document.createElement("div");
+  body.className = "body";
+  const text = typeof content === "string" ? content : JSON.stringify(content);
+  if (!text.includes(PLACEHOLDER)) {
+    body.textContent = text;
+    return body;
+  }
+  text.split(PLACEHOLDER).forEach((part, i) => {
+    if (i) {
+      const ph = document.createElement("span");
+      ph.className = "ph";
+      ph.textContent = PLACEHOLDER;
+      body.appendChild(ph);
+    }
+    body.appendChild(document.createTextNode(part));
+  });
+  return body;
+}
+
+// system сворачивается по клику, но открыт по умолчанию: зритель должен
+// видеть, что инструкция есть и что в ней написано.
+function promptMessage(m) {
+  const role = String(m.role || "?").toLowerCase();
+  if (role === "system") {
+    const el = document.createElement("details");
+    el.className = "msg system";
+    el.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "system";
+    el.append(summary, messageBody(m.content));
+    return el;
+  }
+  const el = document.createElement("div");
+  el.className = "msg " + (role === "assistant" ? "assistant" : "user");
+  const head = document.createElement("div");
+  head.className = "role";
+  head.textContent = role;
+  el.append(head, messageBody(m.content));
+  return el;
+}
+
+function renderPrompt(col, messages, resolved) {
+  col.promptBox.innerHTML = "";
+  (messages || []).forEach((m) => col.promptBox.appendChild(promptMessage(m)));
+  if (!col.dependsOn) return;
+
+  const hint = document.createElement("div");
+  hint.className = "dep-hint";
+  if (resolved) {
+    hint.textContent = `промпт после подстановки вывода колонки «${col.dependsOn}»`;
+  } else if ((messages || []).some((m) => typeof m.content === "string" && m.content.includes(PLACEHOLDER))) {
+    hint.textContent = `${PLACEHOLDER} заменится выводом колонки «${col.dependsOn}» — итоговый промпт появится здесь на старте`;
+  } else {
+    hint.textContent = `колонка стартует после колонки «${col.dependsOn}»`;
+  }
+  col.promptBox.appendChild(hint);
+}
+
 function renderColumns(sessions, layout) {
   const box = $("#columns");
   box.className = "columns" + (layout === "single" ? " single" : "");
@@ -194,6 +257,13 @@ function renderColumns(sessions, layout) {
       <div class="modelid">${s.model}</div>
       ${s.note ? `<div class="note">${s.note}</div>` : ""}`;
 
+    // Лента: промпт сверху (виден до «Старта»), ответы дописываются под ним.
+    const chat = document.createElement("div");
+    chat.className = "chat";
+    const promptBox = document.createElement("div");
+    promptBox.className = "prompt";
+    chat.appendChild(promptBox);
+
     const stats = document.createElement("div");
     stats.className = "stats";
     const values = {};
@@ -205,9 +275,6 @@ function renderColumns(sessions, layout) {
       stats.appendChild(row);
     });
 
-    const output = document.createElement("div");
-    output.className = "output";
-
     const uniq = document.createElement("div");
     uniq.className = "uniq hidden";
 
@@ -215,33 +282,39 @@ function renderColumns(sessions, layout) {
     status.className = "status";
     status.textContent = "ожидание";
 
-    col.append(head, stats, output, uniq, status);
+    // Статистика под лентой: чат сверху, метрики внизу.
+    col.append(head, chat, uniq, stats, status);
     box.appendChild(col);
 
-    state.columns.set(s.label, {
+    const entry = {
       root: col,
       modelId: head.querySelector(".modelid"),
       values,
-      output,
+      chat,
+      promptBox,
       uniq,
       status,
+      dependsOn: s.depends_on || null,
       repeats: new Map(),
       texts: [],
       lastMetrics: null,
-    });
+    };
+    renderPrompt(entry, s.messages, false);
+    state.columns.set(s.label, entry);
   });
 }
 
-function repeatBlock(col, index, total) {
+function answerBlock(col, index, total) {
   if (col.repeats.has(index)) return col.repeats.get(index);
-  const block = document.createElement("div");
-  block.className = "repeat";
-  const label = document.createElement("div");
-  label.className = "rlabel";
-  label.textContent = total > 1 ? `прогон ${index + 1} из ${total}` : "";
+  const el = document.createElement("div");
+  el.className = "msg assistant";
+  const head = document.createElement("div");
+  head.className = "role";
+  head.textContent = total > 1 ? `assistant · прогон ${index + 1} из ${total}` : "assistant";
   const body = document.createElement("div");
-  block.append(label, body);
-  col.output.appendChild(block);
+  body.className = "body";
+  el.append(head, body);
+  col.chat.appendChild(el);
   col.repeats.set(index, body);
   return body;
 }
@@ -295,16 +368,19 @@ function startRun() {
           col.status.className = "status";
           col.status.textContent = "генерация…";
           col.repeatsTotal = e.repeats;
+          // Для колонки с depends_on это первый момент, когда известен
+          // итоговый промпт: заменяем предварительный текст на него.
+          if (e.resolved_messages) renderPrompt(col, e.resolved_messages, true);
         }
         break;
       case "repeat_start":
-        if (col) repeatBlock(col, e.repeat, col.repeatsTotal || 1);
+        if (col) answerBlock(col, e.repeat, col.repeatsTotal || 1);
         break;
       case "delta":
         if (col) {
-          repeatBlock(col, e.repeat, col.repeatsTotal || 1).textContent += e.text;
+          answerBlock(col, e.repeat, col.repeatsTotal || 1).textContent += e.text;
           applyMetrics(col, e.metrics);
-          col.output.scrollTop = col.output.scrollHeight;
+          col.chat.scrollTop = col.chat.scrollHeight;
         }
         break;
       case "metrics":

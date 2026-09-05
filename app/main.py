@@ -146,6 +146,12 @@ async def _run_session(
                 "event": "session_start",
                 "session": label,
                 "repeats": session.repeats,
+                # Лента чата перерисовывается по resolved_messages: для колонки
+                # с depends_on это единственный момент, когда виден итоговый
+                # промпт после подстановки вывода соседней колонки.
+                "resolved_messages": [
+                    {"role": m.get("role", "?"), "content": m.get("content", "")} for m in messages
+                ],
                 "resolved_prompt": "\n\n".join(
                     f"[{m.get('role', '?')}] {m.get('content', '')}" for m in messages
                 ),
