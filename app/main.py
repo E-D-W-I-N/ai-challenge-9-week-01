@@ -256,7 +256,6 @@ async def _run_session(
             {
                 "event": "session_start",
                 "session": label,
-                "repeats": session.repeats,
                 # Лента чата перерисовывается по resolved_messages: для колонки
                 # с depends_on это единственный момент, когда виден итоговый
                 # промпт после подстановки вывода соседней колонки.
@@ -269,60 +268,47 @@ async def _run_session(
             }
         )
 
-        last_text = ""
-        for index in range(max(1, session.repeats)):
-            await queue.put({"event": "repeat_start", "session": label, "repeat": index})
-            text = ""
-            async for chunk in stream_completion(
-                session,
-                prompt_override=messages,
-                context_length=context_lengths.get(session.model),
-            ):
-                kind = chunk["type"]
-                if kind == "delta":
-                    text += chunk["text"]
-                    await queue.put(
-                        {
-                            "event": "delta",
-                            "session": label,
-                            "repeat": index,
-                            "text": chunk["text"],
-                            "metrics": chunk["metrics"],
-                        }
-                    )
-                elif kind == "metrics":
-                    await queue.put(
-                        {
-                            "event": "metrics",
-                            "session": label,
-                            "repeat": index,
-                            "metrics": chunk["metrics"],
-                        }
-                    )
-                elif kind == "error":
-                    await queue.put(
-                        {
-                            "event": "repeat_error",
-                            "session": label,
-                            "repeat": index,
-                            "message": chunk["message"],
-                            "metrics": chunk["metrics"],
-                        }
-                    )
-                elif kind == "done":
-                    await queue.put(
-                        {
-                            "event": "repeat_done",
-                            "session": label,
-                            "repeat": index,
-                            "text": chunk["text"],
-                            "metrics": chunk["metrics"],
-                        }
-                    )
-            last_text = text
+        text = ""
+        final_metrics = None
+        async for chunk in stream_completion(
+            session,
+            prompt_override=messages,
+            context_length=context_lengths.get(session.model),
+        ):
+            kind = chunk["type"]
+            if kind == "delta":
+                text += chunk["text"]
+                await queue.put(
+                    {
+                        "event": "delta",
+                        "session": label,
+                        "text": chunk["text"],
+                        "metrics": chunk["metrics"],
+                    }
+                )
+            elif kind == "metrics":
+                await queue.put(
+                    {"event": "metrics", "session": label, "metrics": chunk["metrics"]}
+                )
+            elif kind == "error":
+                await queue.put(
+                    {
+                        "event": "session_error",
+                        "session": label,
+                        "message": chunk["message"],
+                        "metrics": chunk["metrics"],
+                    }
+                )
+            elif kind == "done":
+                text = chunk["text"]
+                final_metrics = chunk["metrics"]
 
-        results[label] = last_text
-        await queue.put({"event": "session_done", "session": label})
+        results[label] = text
+        # Финальные текст и метрики приезжают этим же событием: колонка
+        # заканчивается ровно одним вызовом.
+        await queue.put(
+            {"event": "session_done", "session": label, "text": text, "metrics": final_metrics}
+        )
     except MissingKeyError as exc:
         await queue.put({"event": "session_error", "session": label, "message": str(exc)})
     except Exception as exc:  # noqa: BLE001 — колонка падает одна, прогон продолжается
