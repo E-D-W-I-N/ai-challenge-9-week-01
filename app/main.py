@@ -302,6 +302,7 @@ class _Outcome:
     ok: bool = False
     finish_reason: str | None = None
     error: str | None = None
+    metrics: dict | None = None
 
 
 def _donor_problem(donor_label: str, donor: _Outcome | None) -> str | None:
@@ -437,6 +438,7 @@ async def _run_session(
             ok=failure is None,
             finish_reason=(final_metrics or {}).get("finish_reason"),
             error=failure,
+            metrics=final_metrics,
         )
         # Финальные текст и метрики приезжают этим же событием: колонка
         # заканчивается ровно одним вызовом.
@@ -458,6 +460,150 @@ async def _run_session(
         event = ready.get(label)
         if event is not None:
             event.set()
+
+
+# --- модель-судья: один вызов после всех колонок, ответ на вопросы задания дня ---
+
+# Дефолтная модель судьи. Заметно крупнее подопытных (в колонках дней стоят
+# mini / lite / small / 8b), поддерживает temperature — без этого вызов с
+# provider.require_parameters=true просто не пройдёт, — не :free и не :batch.
+# Один вызов на прогон, поэтому цена флагмана здесь не проблема.
+JUDGE_MODEL = "openai/gpt-4o"
+JUDGE_TEMPERATURE = 0.2
+"""Судье нужна повторяемость вердикта, а не творчество."""
+
+JUDGE_MAX_TOKENS = 1000
+"""Потолок на всякий случай: вердикт должен помещаться в кадр рядом со сводкой."""
+
+_JUDGE_SYSTEM = (
+    "Ты — независимый судья на стенде сравнения языковых моделей. "
+    "Тебе дают вопросы задания, описание демонстрации и ответы нескольких колонок — "
+    "каждая со своими параметрами и метриками. "
+    "Ответь по каждому вопросу коротко и по существу, опираясь только на приведённые "
+    "ответы и метрики, и закончи одним абзацем — вердиктом. "
+    "Пиши по-русски, без вступлений, без пересказа задания и без выдумывания того, "
+    "чего в данных нет. Колонку, помеченную как не отработавшая, не оценивай: "
+    "скажи, что данных по ней нет."
+)
+
+
+def _judge_column_params(session: Session) -> str:
+    """Только то, чем колонка отличается от соседних, — судье это и сравнивать."""
+    parts = [f"модель={session.model}"]
+    if session.temperature is not None:
+        parts.append(f"temperature={session.temperature}")
+    if session.max_tokens is not None:
+        parts.append(f"max_tokens={session.max_tokens}")
+    if session.stop:
+        parts.append(f"stop={session.stop}")
+    if session.response_format is not None:
+        parts.append(f"response_format={session.response_format}")
+    return ", ".join(parts)
+
+
+def _judge_column_metrics(outcome: _Outcome) -> str:
+    metrics = outcome.metrics or {}
+    elapsed = metrics.get("elapsed_ms")
+    tokens = metrics.get("completion_tokens") or metrics.get("tokens_out")
+    cost = metrics.get("cost_usd")
+    parts = []
+    if elapsed is not None:
+        parts.append(f"время {elapsed / 1000:.2f} с")
+    if tokens is not None:
+        parts.append(f"токенов в ответе {tokens}")
+    if cost is not None:
+        parts.append(f"стоимость ${cost:.6f}")
+    if outcome.finish_reason:
+        parts.append(f"finish_reason={outcome.finish_reason}")
+    return ", ".join(parts) or "метрик нет"
+
+
+def _judge_messages(
+    scenario: Scenario, sessions: list[Session], results: dict[str, _Outcome]
+) -> list[dict]:
+    questions = "\n".join(f"{i}. {q}" for i, q in enumerate(scenario.judge_questions, 1))
+    blocks = [
+        f"Сценарий: {scenario.title}",
+        f"Что демонстрируем: {scenario.description}",
+        f"На что смотреть: {scenario.watch_for}",
+        "",
+        "Вопросы задания:",
+        questions,
+        "",
+    ]
+    for session in sessions:
+        outcome = results.get(session.label) or _Outcome()
+        head = f"### Колонка «{session.label}»"
+        if not outcome.ok or not outcome.text.strip():
+            reason = outcome.error or "ответ пустой"
+            blocks.append(f"{head}\nНЕ ОТРАБОТАЛА: {reason}. Вердикт по ней не выноси.\n")
+            continue
+        blocks.append(
+            f"{head}\n"
+            + (f"Чем отличается: {session.note}\n" if session.note else "")
+            + f"Параметры: {_judge_column_params(session)}\n"
+            + f"Метрики: {_judge_column_metrics(outcome)}\n"
+            + "Ответ:\n"
+            + outcome.text.strip()
+            + "\n"
+        )
+    return [
+        {"role": "system", "content": _JUDGE_SYSTEM},
+        {"role": "user", "content": "\n".join(blocks).strip()},
+    ]
+
+
+async def _run_judge(
+    scenario: Scenario,
+    sessions: list[Session],
+    results: dict[str, _Outcome],
+    context_lengths: dict[str, int],
+):
+    """Один вызов к модели-судье. Ошибка судьи прогон не ломает."""
+    answered = [
+        s for s in sessions
+        if (results.get(s.label) or _Outcome()).ok and (results.get(s.label) or _Outcome()).text.strip()
+    ]
+    if not answered:
+        yield {
+            "event": "judge_skipped",
+            "message": "ни одна колонка не отдала ответ — судить нечего, вызова не было",
+        }
+        return
+
+    model = scenario.judge_model or JUDGE_MODEL
+    # Смысл механизма — что судит другая модель. Совпадение не запрещаем,
+    # но показываем: зритель должен видеть, что судья судит сам себя.
+    conflicts = sorted({s.label for s in sessions if s.model == model})
+    yield {
+        "event": "judge_start",
+        "model": model,
+        "questions": list(scenario.judge_questions),
+        "conflicts": conflicts,
+    }
+
+    judge = Session(
+        label="Судья",
+        model=model,
+        messages=_judge_messages(scenario, sessions, results),
+        temperature=JUDGE_TEMPERATURE,
+        max_tokens=JUDGE_MAX_TOKENS,
+    )
+    try:
+        async for chunk in stream_completion(judge, context_length=context_lengths.get(model)):
+            kind = chunk["type"]
+            if kind == "delta":
+                yield {"event": "judge_delta", "text": chunk["text"], "metrics": chunk["metrics"]}
+            elif kind == "metrics":
+                yield {"event": "judge_metrics", "metrics": chunk["metrics"]}
+            elif kind == "error":
+                yield {"event": "judge_error", "message": chunk["message"], "metrics": chunk["metrics"]}
+            elif kind == "done":
+                yield {"event": "judge_done", "text": chunk["text"], "metrics": chunk["metrics"]}
+    except MissingKeyError as exc:
+        yield {"event": "judge_error", "message": str(exc), "metrics": None}
+    except Exception as exc:  # noqa: BLE001 — падает только вердикт, прогон уже состоялся
+        yield {"event": "judge_error", "message": f"{type(exc).__name__}: {exc}", "metrics": None}
 
 
 async def _cancel_sessions(tasks: list[asyncio.Task]) -> None:
@@ -538,9 +684,18 @@ async def run_scenario(
                     continue
                 yield _sse(event)
 
-            yield _sse(
-                {"event": "run_done", "wall_clock_ms": round((time.monotonic() - started) * 1000, 1)}
-            )
+            # wall-clock снимается до судьи: сводка меряет прогон колонок,
+            # а не время, которое сверху потратил вердикт.
+            wall_clock_ms = round((time.monotonic() - started) * 1000, 1)
+
+            # Судья — один вызов после всех колонок. На прерванном прогоне сюда
+            # не доходим: цикл выше выходит по is_disconnected(), и деньги
+            # на вердикт по неполным данным не тратятся.
+            if scenario.judge_questions:
+                async for event in _run_judge(scenario, sessions, results, context_lengths):
+                    yield _sse(event)
+
+            yield _sse({"event": "run_done", "wall_clock_ms": wall_clock_ms})
         finally:
             await _cancel_sessions(tasks)
 

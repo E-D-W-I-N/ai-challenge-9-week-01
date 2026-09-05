@@ -12,6 +12,7 @@
   --bubble-user: #1b2334;
   --bubble-user-line: #33507e;
   --bubble-system: #161922;
+  --judge: #c4b5fd;
   --radius: 14px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -352,6 +353,62 @@ button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(
   margin-left: 7px;
   border-radius: 50%;
   background: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+/* --- блок «Вердикт»: ответ модели-судьи --- */
+
+.verdict {
+  flex: 0 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--judge);
+  border-radius: var(--radius);
+  padding: 12px 16px 10px;
+  animation: fade-in .18s ease;
+}
+.verdict > header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.verdict h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--judge);
+}
+.judge-model {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.judge-conflict { font-size: 11px; color: var(--warn); }
+
+/* Вердикт должен помещаться в кадр вместе со сводкой, поэтому лента
+   вердикта скроллится, а не растёт вниз без предела. */
+.verdict-body {
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 24vh;
+  overflow-y: auto;
+}
+.verdict-status { margin-top: 8px; font-size: 11px; color: var(--muted); }
+.verdict-status.error { color: var(--bad); }
+.verdict.busy .verdict-status { color: var(--judge); }
+.verdict.busy .verdict-status::after {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--judge);
   animation: pulse 1s ease-in-out infinite;
   vertical-align: middle;
 }
