@@ -3,10 +3,11 @@
 const state = {
   scenarios: [],
   current: null,
+  hasKey: false,
   overrides: {},      // { sessionLabel: { model } }
-  columns: new Map(), // label -> DOM refs
+  columns: new Map(), // label -> DOM refs + лента диалога
   source: null,
-  runStarted: 0,
+  running: false,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -27,6 +28,7 @@ async function loadScenarios() {
   const res = await fetch("/api/scenarios");
   const data = await res.json();
   state.scenarios = data.scenarios;
+  state.hasKey = !!data.has_key;
 
   const badge = $("#key-status");
   badge.textContent = data.has_key ? "OPENROUTER_API_KEY найден" : "нет .env с OPENROUTER_API_KEY";
@@ -89,22 +91,33 @@ function selectScenario(id) {
   document.querySelectorAll("#scenario-list li").forEach((li) => {
     li.classList.toggle("active", li.dataset.id === id);
   });
-  renderBriefing(sc);
+  renderScenarioBar(sc);
   renderColumns(sc.sessions, sc.layout);
   $("#summary").classList.add("hidden");
 }
 
-function renderBriefing(sc) {
-  const box = $("#briefing");
-  box.classList.remove("empty");
-  box.innerHTML = `
-    <h2>${sc.title}</h2>
+// Шапка сценария — одна компактная строка: название, модели, «Старт».
+// description и watch_for живут в сворачиваемом блоке, закрытом по умолчанию.
+function renderScenarioBar(sc) {
+  const bar = $("#scenario-bar");
+  bar.innerHTML = `
+    <h2 class="scenario-title">${sc.title}</h2>
+    <div id="pickers" class="pickers"></div>
+    <button class="ghost" id="about-btn" aria-expanded="false">О сценарии</button>
+    <button class="start" id="start-btn">Старт</button>`;
+
+  const about = $("#about");
+  about.classList.add("hidden");
+  about.innerHTML = `
     <p>${sc.description}</p>
-    <p class="watch"><strong>На что смотреть:</strong> ${sc.watch_for}</p>
-    <div class="controls">
-      <button class="start" id="start-btn">Старт</button>
-      <div id="pickers" style="display:flex;gap:10px;flex-wrap:wrap"></div>
-    </div>`;
+    <p class="watch"><strong>На что смотреть:</strong> ${sc.watch_for}</p>`;
+
+  const aboutBtn = $("#about-btn");
+  aboutBtn.onclick = () => {
+    const open = !about.classList.toggle("hidden");
+    aboutBtn.setAttribute("aria-expanded", String(open));
+    aboutBtn.classList.toggle("active", open);
+  };
   $("#start-btn").onclick = startRun;
   buildPickers(sc);
 }
@@ -140,6 +153,12 @@ async function buildPickers(sc) {
   sc.sessions.forEach((s) => {
     const wrap = document.createElement("label");
     wrap.className = "model-picker";
+    if (sc.sessions.length > 1) {
+      const name = document.createElement("span");
+      name.className = "picker-label";
+      name.textContent = s.label;
+      wrap.appendChild(name);
+    }
     const sel = document.createElement("select");
     const options = models.some((m) => m.id === s.model)
       ? models
@@ -159,7 +178,7 @@ async function buildPickers(sc) {
       const col = state.columns.get(s.label);
       if (col) col.modelId.textContent = sel.value;
     };
-    wrap.append(document.createTextNode(s.label), sel);
+    wrap.appendChild(sel);
     box.appendChild(wrap);
   });
 }
@@ -242,6 +261,85 @@ function renderPrompt(col, messages, resolved) {
   col.promptBox.appendChild(hint);
 }
 
+function scrollChat(col) {
+  col.chat.scrollTop = col.chat.scrollHeight;
+}
+
+// Сообщение, дописанное после промпта сценария: ручной вопрос или ответ модели.
+function appendMessage(col, role, text, caption) {
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  const head = document.createElement("div");
+  head.className = "role";
+  head.textContent = caption || role;
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent = text || "";
+  el.append(head, body);
+  col.chat.appendChild(el);
+  scrollChat(col);
+  return body;
+}
+
+function autoGrow(input) {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+}
+
+function setStatus(col, kind, text) {
+  col.status.className = "status" + (kind ? " " + kind : "");
+  col.status.textContent = text;
+}
+
+function setBusy(col, busy) {
+  col.busy = busy;
+  col.root.classList.toggle("busy", busy);
+  if (!col.input) return;
+  col.input.disabled = busy || !state.hasKey;
+  col.sendBtn.disabled = busy || !state.hasKey;
+}
+
+function buildComposer(col) {
+  const form = document.createElement("form");
+  form.className = "composer";
+
+  const input = document.createElement("textarea");
+  input.className = "composer-input";
+  input.rows = 1;
+  const send = document.createElement("button");
+  send.type = "submit";
+  send.className = "send";
+  send.textContent = "Отправить";
+
+  input.title = "Enter — отправить, Shift+Enter — перенос строки";
+  if (state.hasKey) {
+    input.placeholder = "Спросить модель…";
+  } else {
+    // Без ключа поле недоступно, но видно, чего не хватает.
+    input.placeholder = "Нужен .env с OPENROUTER_API_KEY";
+    input.disabled = true;
+    send.disabled = true;
+    form.classList.add("locked");
+  }
+
+  input.addEventListener("input", () => autoGrow(input));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    sendManual(col);
+  });
+
+  form.append(input, send);
+  col.input = input;
+  col.sendBtn = send;
+  return form;
+}
+
 function renderColumns(sessions, layout) {
   const box = $("#columns");
   box.className = "columns" + (layout === "single" ? " single" : "");
@@ -257,7 +355,7 @@ function renderColumns(sessions, layout) {
       <div class="modelid">${s.model}</div>
       ${s.note ? `<div class="note">${s.note}</div>` : ""}`;
 
-    // Лента: промпт сверху (виден до «Старта»), ответы дописываются под ним.
+    // Лента: промпт сверху (виден до «Старта»), ответы и ручные вопросы — под ним.
     const chat = document.createElement("div");
     chat.className = "chat";
     const promptBox = document.createElement("div");
@@ -282,11 +380,9 @@ function renderColumns(sessions, layout) {
     status.className = "status";
     status.textContent = "ожидание";
 
-    // Статистика под лентой: чат сверху, метрики внизу.
-    col.append(head, chat, uniq, stats, status);
-    box.appendChild(col);
-
     const entry = {
+      label: s.label,
+      session: s,
       root: col,
       modelId: head.querySelector(".modelid"),
       values,
@@ -295,31 +391,33 @@ function renderColumns(sessions, layout) {
       uniq,
       status,
       dependsOn: s.depends_on || null,
+      base: (s.messages || []).map((m) => ({ role: m.role, content: m.content })),
+      turns: [],          // всё, что добавилось после промпта сценария
       repeats: new Map(),
       texts: [],
+      lastText: "",
       lastMetrics: null,
+      busy: false,
     };
-    renderPrompt(entry, s.messages, false);
+
+    // Лента скроллится, метрики и поле ввода остаются на месте.
+    col.append(head, chat, uniq, stats, status, buildComposer(entry));
+    box.appendChild(col);
+
+    renderPrompt(entry, entry.base, false);
     state.columns.set(s.label, entry);
   });
 }
 
 function answerBlock(col, index, total) {
   if (col.repeats.has(index)) return col.repeats.get(index);
-  const el = document.createElement("div");
-  el.className = "msg assistant";
-  const head = document.createElement("div");
-  head.className = "role";
-  head.textContent = total > 1 ? `assistant · прогон ${index + 1} из ${total}` : "assistant";
-  const body = document.createElement("div");
-  body.className = "body";
-  el.append(head, body);
-  col.chat.appendChild(el);
+  const body = appendMessage(col, "assistant", "", total > 1 ? `assistant · прогон ${index + 1} из ${total}` : null);
   col.repeats.set(index, body);
   return body;
 }
 
 function applyMetrics(col, metrics) {
+  if (!metrics) return;
   col.lastMetrics = metrics;
   STAT_FIELDS.forEach(([key, , fmt]) => {
     const el = col.values[key];
@@ -330,11 +428,120 @@ function applyMetrics(col, metrics) {
   });
 }
 
+// --- ручной ввод: диалог продолжается всей накопленной лентой колонки ---
+
+function columnModel(col) {
+  return (state.overrides[col.label] || {}).model || col.session.model;
+}
+
+function columnPayload(col) {
+  const s = col.session;
+  return {
+    label: col.label,
+    model: columnModel(col),
+    messages: col.base.concat(col.turns),
+    temperature: s.temperature ?? null,
+    max_tokens: s.max_tokens ?? null,
+    stop: s.stop ?? null,
+    response_format: s.response_format ?? null,
+    extra_body: s.extra_body || {},
+  };
+}
+
+// SSE поверх POST: тело запроса — вся лента колонки, в GET-строку она не влезет.
+async function streamChat(payload, onEvent) {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body && body.detail) {
+        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      }
+    } catch (e) { /* тело не JSON — остаётся код статуса */ }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const frame = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      frame.split("\n").forEach((line) => {
+        if (line.startsWith("data: ")) onEvent(JSON.parse(line.slice(6)));
+      });
+    }
+  }
+}
+
+async function sendManual(col) {
+  const text = (col.input.value || "").trim();
+  if (!text || col.busy || !state.hasKey) return;
+
+  col.input.value = "";
+  autoGrow(col.input);
+  // Вопрос уходит в модель вместе со всей лентой: диалог продолжается.
+  col.turns.push({ role: "user", content: text });
+  appendMessage(col, "user", text);
+
+  const body = appendMessage(col, "assistant", "");
+  setBusy(col, true);
+  setStatus(col, "", "генерация…");
+
+  let answer = "";
+  try {
+    await streamChat(columnPayload(col), (e) => {
+      switch (e.event) {
+        case "delta":
+          answer += e.text;
+          body.textContent = answer;
+          applyMetrics(col, e.metrics);
+          scrollChat(col);
+          break;
+        case "metrics":
+          applyMetrics(col, e.metrics);
+          break;
+        case "error":
+          applyMetrics(col, e.metrics);
+          setStatus(col, "error", e.message);
+          break;
+        case "done":
+          applyMetrics(col, e.metrics);
+          answer = e.text || answer;
+          body.textContent = answer;
+          break;
+      }
+    });
+    if (answer) {
+      col.turns.push({ role: "assistant", content: answer });
+      if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
+    }
+  } catch (err) {
+    setStatus(col, "error", String(err.message || err));
+  } finally {
+    setBusy(col, false);
+    scrollChat(col);
+  }
+}
+
+// --- прогон сценария ---
+
 function startRun() {
-  if (!state.current) return;
+  if (!state.current || state.running) return;
   const btn = $("#start-btn");
   btn.disabled = true;
   btn.textContent = "идёт прогон…";
+  state.running = true;
 
   const sessions = state.current.sessions.map((s) => ({
     ...s,
@@ -342,9 +549,16 @@ function startRun() {
   }));
   renderColumns(sessions, state.current.layout);
   $("#summary").classList.add("hidden");
-  state.runStarted = performance.now();
+  state.columns.forEach((col) => setBusy(col, true));
 
   const totals = { cost: 0, tokens: 0, done: 0, expected: sessions.length };
+
+  const finish = () => {
+    state.running = false;
+    btn.disabled = false;
+    btn.textContent = "Старт";
+    state.columns.forEach((col) => setBusy(col, false));
+  };
 
   const qs = Object.keys(state.overrides).length
     ? "?overrides=" + encodeURIComponent(JSON.stringify(state.overrides))
@@ -358,19 +572,18 @@ function startRun() {
 
     switch (e.event) {
       case "session_waiting":
-        if (col) {
-          col.status.className = "status waiting";
-          col.status.textContent = `ждёт вывод колонки «${e.on}»`;
-        }
+        if (col) setStatus(col, "waiting", `ждёт вывод колонки «${e.on}»`);
         break;
       case "session_start":
         if (col) {
-          col.status.className = "status";
-          col.status.textContent = "генерация…";
+          setStatus(col, "", "генерация…");
           col.repeatsTotal = e.repeats;
           // Для колонки с depends_on это первый момент, когда известен
           // итоговый промпт: заменяем предварительный текст на него.
-          if (e.resolved_messages) renderPrompt(col, e.resolved_messages, true);
+          if (e.resolved_messages) {
+            col.base = e.resolved_messages.map((m) => ({ role: m.role, content: m.content }));
+            renderPrompt(col, col.base, true);
+          }
         }
         break;
       case "repeat_start":
@@ -380,7 +593,7 @@ function startRun() {
         if (col) {
           answerBlock(col, e.repeat, col.repeatsTotal || 1).textContent += e.text;
           applyMetrics(col, e.metrics);
-          col.chat.scrollTop = col.chat.scrollHeight;
+          scrollChat(col);
         }
         break;
       case "metrics":
@@ -389,7 +602,8 @@ function startRun() {
       case "repeat_done":
         if (col) {
           applyMetrics(col, e.metrics);
-          col.texts.push((e.text || "").trim());
+          col.lastText = (e.text || "").trim();
+          col.texts.push(col.lastText);
           if (e.metrics.cost_usd) totals.cost += e.metrics.cost_usd;
           if (e.metrics.total_tokens) totals.tokens += e.metrics.total_tokens;
           if ((col.repeatsTotal || 1) > 1) {
@@ -404,22 +618,23 @@ function startRun() {
       case "repeat_error":
       case "session_error":
         if (col) {
-          col.status.className = "status error";
-          col.status.textContent = e.message;
-          if (e.metrics) applyMetrics(col, e.metrics);
+          setStatus(col, "error", e.message);
+          applyMetrics(col, e.metrics);
         }
         break;
       case "session_done":
         if (col) {
-          col.status.className = "status";
-          col.status.textContent = "готово";
+          if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
+          // Ответ сценария становится частью диалога: следующий ручной
+          // вопрос уйдёт в модель вместе с ним.
+          if (col.lastText) col.turns.push({ role: "assistant", content: col.lastText });
+          setBusy(col, false);
         }
         totals.done += 1;
         break;
       case "run_done":
         source.close();
-        btn.disabled = false;
-        btn.textContent = "Старт";
+        finish();
         renderSummary(totals, e.wall_clock_ms);
         break;
     }
@@ -427,32 +642,36 @@ function startRun() {
 
   source.onerror = () => {
     source.close();
-    btn.disabled = false;
-    btn.textContent = "Старт";
+    finish();
   };
 }
 
+// Сравнение колонок имеет смысл только когда колонок больше одной:
+// «самая быстрая» на единственной колонке сравнивать не с чем.
 function renderSummary(totals, wallClockMs) {
-  const cols = [...state.columns.entries()]
-    .map(([label, c]) => ({ label, m: c.lastMetrics }))
-    .filter((x) => x.m && !x.m.error);
-
-  const fastest = cols
-    .filter((x) => x.m.ttft_ms !== null)
-    .sort((a, b) => a.m.ttft_ms - b.m.ttft_ms)[0];
-  const cheapest = cols
-    .filter((x) => x.m.cost_usd !== null && x.m.cost_usd !== undefined)
-    .sort((a, b) => a.m.cost_usd - b.m.cost_usd)[0];
-
-  const box = $("#summary");
-  box.classList.remove("hidden");
-  box.innerHTML = [
+  const rows = [
     ["суммарная стоимость", fmtCost(totals.cost)],
     ["суммарно токенов", String(totals.tokens)],
     ["wall-clock", fmtMs(wallClockMs)],
-    ["самая быстрая", fastest ? `${fastest.label} · ${fmtMs(fastest.m.ttft_ms)}` : "—"],
-    ["самая дешёвая", cheapest ? `${cheapest.label} · ${fmtCost(cheapest.m.cost_usd)}` : "—"],
-  ]
+  ];
+
+  if (state.columns.size > 1) {
+    const cols = [...state.columns.entries()]
+      .map(([label, c]) => ({ label, m: c.lastMetrics }))
+      .filter((x) => x.m && !x.m.error);
+    const fastest = cols
+      .filter((x) => x.m.ttft_ms !== null && x.m.ttft_ms !== undefined)
+      .sort((a, b) => a.m.ttft_ms - b.m.ttft_ms)[0];
+    const cheapest = cols
+      .filter((x) => x.m.cost_usd !== null && x.m.cost_usd !== undefined)
+      .sort((a, b) => a.m.cost_usd - b.m.cost_usd)[0];
+    if (fastest) rows.push(["самая быстрая", `${fastest.label} · ${fmtMs(fastest.m.ttft_ms)}`]);
+    if (cheapest) rows.push(["самая дешёвая", `${cheapest.label} · ${fmtCost(cheapest.m.cost_usd)}`]);
+  }
+
+  const box = $("#summary");
+  box.classList.remove("hidden");
+  box.innerHTML = rows
     .map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`)
     .join("");
 }

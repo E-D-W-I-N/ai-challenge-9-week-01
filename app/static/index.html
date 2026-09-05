@@ -7,27 +7,32 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <h1>AI Challenge — стенд сценариев</h1>
-    <div id="key-status" class="badge"></div>
-  </header>
+  <div class="app">
+    <header class="topbar">
+      <h1>AI Challenge — стенд сценариев</h1>
+      <div id="key-status" class="badge"></div>
+    </header>
 
-  <main class="layout">
-    <aside class="sidebar">
-      <h2>Сценарии</h2>
-      <div id="scenario-list" class="scenario-list"></div>
-      <div id="registry-errors" class="errors"></div>
-    </aside>
+    <main class="layout">
+      <aside class="sidebar">
+        <h2>Сценарии</h2>
+        <div id="scenario-list" class="scenario-list"></div>
+        <div id="registry-errors" class="errors"></div>
+      </aside>
 
-    <section class="content">
-      <div id="briefing" class="briefing empty">
-        <p class="hint">Выберите сценарий слева.</p>
-      </div>
+      <section class="content">
+        <div id="scenario-bar" class="scenario-bar">
+          <p class="hint">Выберите сценарий слева.</p>
+        </div>
 
-      <div id="summary" class="summary hidden"></div>
-      <div id="columns" class="columns"></div>
-    </section>
-  </main>
+        <div id="about" class="about hidden"></div>
+
+        <div id="columns" class="columns"></div>
+
+        <div id="summary" class="summary hidden"></div>
+      </section>
+    </main>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
