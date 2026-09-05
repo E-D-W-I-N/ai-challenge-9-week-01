@@ -379,6 +379,15 @@ function renderColumns(sessions, layout) {
       stats.appendChild(row);
     });
 
+    // Подпись к панели: при серии метрики в ней относятся к конкретному
+    // прогону, и это должно быть написано, а не подразумеваться.
+    const statsNote = document.createElement("div");
+    statsNote.className = "stats-note hidden";
+
+    // Доля уникальных ответов — то, ради чего серия и делается.
+    const uniq = document.createElement("div");
+    uniq.className = "uniq hidden";
+
     const status = document.createElement("div");
     status.className = "status";
     status.textContent = "ожидание";
@@ -391,17 +400,22 @@ function renderColumns(sessions, layout) {
       values,
       chat,
       promptBox,
+      statsNote,
+      uniq,
       status,
       dependsOn: s.depends_on || null,
       base: (s.messages || []).map((m) => ({ role: m.role, content: m.content })),
       turns: [],          // всё, что добавилось после промпта сценария
       answer: null,       // тело ответа сценария, в него стримятся delta
+      repeatsTotal: 1,    // длина серии: приходит в session_start
+      repeats: new Map(), // индекс прогона -> тело его блока
+      texts: [],          // тексты прогонов серии — из них считается уникальность
       lastMetrics: null,
       busy: false,
     };
 
     // Лента скроллится, метрики и поле ввода остаются на месте.
-    col.append(head, chat, stats, status, buildComposer(entry));
+    col.append(head, chat, uniq, statsNote, stats, status, buildComposer(entry));
     box.appendChild(col);
 
     renderPrompt(entry, entry.base, false);
@@ -409,10 +423,47 @@ function renderColumns(sessions, layout) {
   });
 }
 
-// Ответ сценария — одно сообщение assistant на колонку.
-function answerBlock(col) {
-  if (!col.answer) col.answer = appendMessage(col, "assistant", "");
-  return col.answer;
+// Ответ сценария. При repeats=1 это одно сообщение assistant на колонку,
+// при серии — по сообщению на прогон с подписью «прогон N из M».
+function answerBlock(col, repeat) {
+  if (repeat === undefined || repeat === null) {
+    if (!col.answer) col.answer = appendMessage(col, "assistant", "");
+    return col.answer;
+  }
+  if (!col.repeats.has(repeat)) {
+    col.repeats.set(
+      repeat,
+      appendMessage(col, "assistant", "", `assistant · прогон ${repeat + 1} из ${col.repeatsTotal}`)
+    );
+  }
+  return col.repeats.get(repeat);
+}
+
+// Метрики прогона дописываются под его же ответом и больше не меняются:
+// панель внизу показывает текущий прогон, а прошлые остаются в ленте.
+function repeatMetricsLine(body, metrics) {
+  if (!metrics) return;
+  const parts = [];
+  if (metrics.ttft_ms !== null && metrics.ttft_ms !== undefined) parts.push("TTFT " + fmtMs(metrics.ttft_ms));
+  if (metrics.tokens_per_second) parts.push(metrics.tokens_per_second.toFixed(1) + " ток/с");
+  if (metrics.completion_tokens || metrics.tokens_out) parts.push((metrics.completion_tokens || metrics.tokens_out) + " токенов");
+  if (metrics.cost_usd !== null && metrics.cost_usd !== undefined) parts.push(fmtCost(metrics.cost_usd));
+  if (metrics.finish_reason) parts.push(metrics.finish_reason);
+  if (!parts.length) return;
+  const line = document.createElement("div");
+  line.className = "repeat-metrics";
+  line.textContent = parts.join("  ·  ");
+  body.parentElement.appendChild(line);
+}
+
+// «уникальных ответов: N из M» — счётчик растёт по ходу серии.
+function updateUniq(col) {
+  if (col.repeatsTotal <= 1 || !col.texts.length) return;
+  const unique = new Set(col.texts.map((t) => t.trim())).size;
+  col.uniq.classList.remove("hidden");
+  col.uniq.textContent =
+    `уникальных ответов: ${unique} из ${col.texts.length}` +
+    ` (${Math.round((100 * unique) / col.texts.length)} %)`;
 }
 
 function applyMetrics(col, metrics) {
@@ -734,7 +785,10 @@ function startRun() {
       case "session_start":
         started.add(e.session);
         if (col) {
-          setStatus(col, "", "генерация…");
+          col.repeatsTotal = e.repeats || 1;
+          setStatus(col, "", col.repeatsTotal > 1
+            ? `генерация… прогон 1 из ${col.repeatsTotal}`
+            : "генерация…");
           // Для колонки с depends_on это первый момент, когда известен
           // итоговый промпт: заменяем предварительный текст на него.
           if (e.resolved_messages) {
@@ -743,15 +797,50 @@ function startRun() {
           }
         }
         break;
+      case "repeat_start":
+        if (col) {
+          col.repeatsTotal = e.repeats || col.repeatsTotal;
+          answerBlock(col, e.repeat);
+          setStatus(col, "", `генерация… прогон ${e.repeat + 1} из ${col.repeatsTotal}`);
+          // Панель метрик подписана прогоном: видно, к чему относятся цифры.
+          col.statsNote.classList.remove("hidden");
+          col.statsNote.textContent = `метрики прогона ${e.repeat + 1} из ${col.repeatsTotal}`;
+        }
+        break;
       case "delta":
         if (col) {
-          answerBlock(col).textContent += e.text;
+          answerBlock(col, e.repeat).textContent += e.text;
           applyMetrics(col, e.metrics);
           scrollChat(col);
         }
         break;
       case "metrics":
         if (col) applyMetrics(col, e.metrics);
+        break;
+      case "repeat_done":
+        if (col) {
+          applyMetrics(col, e.metrics);
+          repeatMetricsLine(answerBlock(col, e.repeat), e.metrics);
+          col.texts.push(e.text || "");
+          updateUniq(col);
+          // Сумма по прогону складывается здесь: session_done у серии несёт
+          // метрики последнего прогона и второй раз их считать нельзя.
+          if (e.metrics) {
+            if (e.metrics.cost_usd) totals.cost += e.metrics.cost_usd;
+            if (e.metrics.total_tokens) totals.tokens += e.metrics.total_tokens;
+          }
+          scrollChat(col);
+        }
+        break;
+      case "repeat_error":
+        // Падение одного прогона не хоронит колонку: серия идёт дальше.
+        if (col) {
+          const body = answerBlock(col, e.repeat);
+          body.classList.add("failed");
+          body.textContent = e.message;
+          applyMetrics(col, e.metrics);
+          scrollChat(col);
+        }
         break;
       case "session_error":
         settled.add(e.session);
@@ -764,9 +853,15 @@ function startRun() {
         settled.add(e.session);
         if (col) {
           applyMetrics(col, e.metrics);
-          if (e.metrics) {
+          // У серии суммы уже сложены по repeat_done — иначе последний
+          // прогон посчитался бы дважды.
+          if (e.metrics && !(e.repeats > 1)) {
             if (e.metrics.cost_usd) totals.cost += e.metrics.cost_usd;
             if (e.metrics.total_tokens) totals.tokens += e.metrics.total_tokens;
+          }
+          if (e.repeats > 1) {
+            col.statsNote.textContent = `метрики последнего прогона из ${e.repeats}`;
+            updateUniq(col);
           }
           if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
           // Ответ сценария становится частью диалога: следующий ручной
