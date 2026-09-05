@@ -33,14 +33,6 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
-def _session_public(session: Session) -> dict:
-    data = asdict(session)
-    data["messages_preview"] = "\n\n".join(
-        f"[{m.get('role', '?')}] {str(m.get('content', ''))[:400]}" for m in session.messages
-    )
-    return data
-
-
 def _scenario_public(scenario: Scenario, day: str = "", day_title: str = "") -> dict:
     return {
         "id": scenario.id,
@@ -50,7 +42,7 @@ def _scenario_public(scenario: Scenario, day: str = "", day_title: str = "") -> 
         "description": scenario.description,
         "watch_for": scenario.watch_for,
         "layout": scenario.layout,
-        "sessions": [_session_public(s) for s in scenario.sessions],
+        "sessions": [asdict(s) for s in scenario.sessions],
     }
 
 
@@ -392,9 +384,6 @@ async def _run_session(
             "resolved_messages": [
                 {"role": m.get("role", "?"), "content": m.get("content", "")} for m in messages
             ],
-            "resolved_prompt": "\n\n".join(
-                f"[{m.get('role', '?')}] {m.get('content', '')}" for m in messages
-            ),
         }
         if donor is not None:
             # Обрыв донора по max_tokens: подставили урезанный промпт — UI
@@ -532,7 +521,7 @@ async def run_scenario(
                     "scenario": scenario.id,
                     "title": scenario.title,
                     "layout": scenario.layout,
-                    "sessions": [_session_public(s) for s in sessions],
+                    "sessions": [asdict(s) for s in sessions],
                 }
             )
 
