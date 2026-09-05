@@ -82,11 +82,9 @@ async def list_models(
     requires: str = Query("", description="csv: temperature,stop,response_format"),
     exclude_free: bool = False,
     exclude_temperature_capped: bool = False,
-    q: str = "",
-    refresh: bool = False,
 ) -> dict:
     try:
-        models = await catalog.fetch_models(force=refresh)
+        models = await catalog.fetch_models()
     except Exception as exc:  # каталог недоступен — UI не должен падать
         raise HTTPException(status_code=502, detail=f"каталог моделей недоступен: {exc}") from exc
     needed = tuple(p.strip() for p in requires.split(",") if p.strip())
@@ -95,7 +93,6 @@ async def list_models(
         requires=needed,
         exclude_free=exclude_free,
         exclude_temperature_capped=exclude_temperature_capped,
-        query=q,
     )
     return {"total": len(models), "count": len(filtered), "models": filtered}
 
