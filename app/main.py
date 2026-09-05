@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -215,6 +216,32 @@ async def chat(payload: dict = Body(...)) -> StreamingResponse:
     )
 
 
+@dataclass
+class _Outcome:
+    """Чем закончилась колонка. Нужно тем, кто ждёт её вывод по depends_on."""
+
+    text: str = ""
+    ok: bool = False
+    finish_reason: str | None = None
+    error: str | None = None
+
+
+def _donor_problem(donor_label: str, donor: _Outcome | None) -> str | None:
+    """Почему зависимую колонку запускать нельзя. None — можно.
+
+    Без этой проверки в модель уходила пустая подстановка: донор упал, а
+    зависимая колонка всё равно стартовала и отвечала на промпт, из которого
+    вырезали половину. На записи это выглядит как «техника не сработала»,
+    хотя не сработал вызов, — и стоит денег.
+    """
+    if donor is None or not donor.ok:
+        detail = f": {donor.error}" if donor is not None and donor.error else ""
+        return f"колонка пропущена: донор «{donor_label}» не отдал ответ{detail}"
+    if not donor.text.strip():
+        return f"колонка пропущена: донор «{donor_label}» вернул пустой ответ"
+    return None
+
+
 def _substitute(messages: list[dict], value: str) -> list[dict]:
     out = []
     for message in messages:
@@ -229,14 +256,16 @@ async def _run_session(
     session: Session,
     context_lengths: dict[str, int],
     queue: asyncio.Queue,
-    results: dict[str, str],
+    results: dict[str, _Outcome],
     ready: dict[str, asyncio.Event],
 ) -> None:
     label = session.label
+    outcome = _Outcome()
     try:
         if session.depends_on:
             waiter = ready.get(session.depends_on)
             if waiter is None:
+                outcome.error = f"сессии «{session.depends_on}» нет в сценарии"
                 await queue.put(
                     {
                         "event": "session_error",
@@ -248,28 +277,52 @@ async def _run_session(
             await queue.put({"event": "session_waiting", "session": label, "on": session.depends_on})
             await waiter.wait()
 
+        donor: _Outcome | None = None
         messages = session.messages
         if session.depends_on:
-            messages = _substitute(messages, results.get(session.depends_on, ""))
+            donor = results.get(session.depends_on)
+            problem = _donor_problem(session.depends_on, donor)
+            if problem is not None:
+                # В модель не идём вовсе: подставлять нечего.
+                outcome.error = problem
+                await queue.put(
+                    {
+                        "event": "session_error",
+                        "session": label,
+                        "message": problem,
+                        "reason": "depends_on_failed",
+                        "on": session.depends_on,
+                    }
+                )
+                return
+            messages = _substitute(messages, donor.text)
 
-        await queue.put(
-            {
-                "event": "session_start",
-                "session": label,
-                # Лента чата перерисовывается по resolved_messages: для колонки
-                # с depends_on это единственный момент, когда виден итоговый
-                # промпт после подстановки вывода соседней колонки.
-                "resolved_messages": [
-                    {"role": m.get("role", "?"), "content": m.get("content", "")} for m in messages
-                ],
-                "resolved_prompt": "\n\n".join(
-                    f"[{m.get('role', '?')}] {m.get('content', '')}" for m in messages
-                ),
+        start_event = {
+            "event": "session_start",
+            "session": label,
+            # Лента чата перерисовывается по resolved_messages: для колонки
+            # с depends_on это единственный момент, когда виден итоговый
+            # промпт после подстановки вывода соседней колонки.
+            "resolved_messages": [
+                {"role": m.get("role", "?"), "content": m.get("content", "")} for m in messages
+            ],
+            "resolved_prompt": "\n\n".join(
+                f"[{m.get('role', '?')}] {m.get('content', '')}" for m in messages
+            ),
+        }
+        if donor is not None:
+            # Обрыв донора по max_tokens: подставили урезанный промпт — UI
+            # помечает это в подписи под лентой, чтобы не гадать на записи.
+            start_event["donor"] = {
+                "label": session.depends_on,
+                "finish_reason": donor.finish_reason,
+                "truncated": donor.finish_reason == "length",
             }
-        )
+        await queue.put(start_event)
 
         text = ""
         final_metrics = None
+        failure: str | None = None
         async for chunk in stream_completion(
             session,
             prompt_override=messages,
@@ -291,6 +344,7 @@ async def _run_session(
                     {"event": "metrics", "session": label, "metrics": chunk["metrics"]}
                 )
             elif kind == "error":
+                failure = chunk["message"]
                 await queue.put(
                     {
                         "event": "session_error",
@@ -303,26 +357,58 @@ async def _run_session(
                 text = chunk["text"]
                 final_metrics = chunk["metrics"]
 
-        results[label] = text
+        outcome = _Outcome(
+            text=text,
+            ok=failure is None,
+            finish_reason=(final_metrics or {}).get("finish_reason"),
+            error=failure,
+        )
         # Финальные текст и метрики приезжают этим же событием: колонка
         # заканчивается ровно одним вызовом.
         await queue.put(
             {"event": "session_done", "session": label, "text": text, "metrics": final_metrics}
         )
     except MissingKeyError as exc:
+        outcome = _Outcome(error=str(exc))
         await queue.put({"event": "session_error", "session": label, "message": str(exc)})
     except Exception as exc:  # noqa: BLE001 — колонка падает одна, прогон продолжается
+        outcome = _Outcome(error=f"{type(exc).__name__}: {exc}")
         await queue.put(
             {"event": "session_error", "session": label, "message": f"{type(exc).__name__}: {exc}"}
         )
     finally:
+        # Исход записывается всегда: зависимая колонка должна узнать и об успехе,
+        # и о падении, а не гадать по отсутствию записи.
+        results[label] = outcome
         event = ready.get(label)
         if event is not None:
             event.set()
 
 
+async def _cancel_sessions(tasks: list[asyncio.Task]) -> None:
+    """Гасит незавершённые сессии прогона.
+
+    Вызывается, когда SSE-поток закрылся: пользователь закрыл вкладку,
+    перезагрузил страницу или перевыбрал сценарий. Без этого задачи продолжают
+    качать ответ из OpenRouter до конца — стенд платит за токены, которых никто
+    не увидит, а на днях с provider.allow_fallbacks=false брошенный вызов ещё и
+    занимает провайдера, к которому пойдёт следующий дубль записи.
+    """
+    unfinished = [task for task in tasks if not task.done()]
+    if not unfinished:
+        return
+    for task in unfinished:
+        task.cancel()
+    # cancel() уже разослан: вызовы закроются, даже если нас самих отменяют
+    # и дождаться завершения не дадут.
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.gather(*unfinished, return_exceptions=True)
+
+
 @app.get("/api/run/{scenario_id}")
-async def run_scenario(scenario_id: str, overrides: str = "") -> StreamingResponse:
+async def run_scenario(
+    request: Request, scenario_id: str, overrides: str = ""
+) -> StreamingResponse:
     scenario = registry.get(scenario_id)
     if scenario is None:
         raise HTTPException(status_code=404, detail=f"сценарий {scenario_id} не найден")
@@ -349,37 +435,44 @@ async def run_scenario(scenario_id: str, overrides: str = "") -> StreamingRespon
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
-        results: dict[str, str] = {}
+        results: dict[str, _Outcome] = {}
         ready = {s.label: asyncio.Event() for s in sessions}
         started = time.monotonic()
-
-        yield _sse(
-            {
-                "event": "run_start",
-                "scenario": scenario.id,
-                "title": scenario.title,
-                "layout": scenario.layout,
-                "sessions": [_session_public(s) for s in sessions],
-            }
-        )
 
         tasks = [
             asyncio.create_task(_run_session(s, context_lengths, queue, results, ready))
             for s in sessions
         ]
-        pending = asyncio.ensure_future(asyncio.gather(*tasks))
+        # Всё, что ниже, — под finally: закрытие потока обязано погасить вызовы.
+        try:
+            yield _sse(
+                {
+                    "event": "run_start",
+                    "scenario": scenario.id,
+                    "title": scenario.title,
+                    "layout": scenario.layout,
+                    "sessions": [_session_public(s) for s in sessions],
+                }
+            )
 
-        while True:
-            if pending.done() and queue.empty():
-                break
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                yield ": keepalive\n\n"
-                continue
-            yield _sse(event)
+            while True:
+                # Клиент ушёл со страницы — дальше генерировать некому и незачем.
+                if await request.is_disconnected():
+                    return
+                if queue.empty() and all(task.done() for task in tasks):
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield _sse(event)
 
-        yield _sse({"event": "run_done", "wall_clock_ms": round((time.monotonic() - started) * 1000, 1)})
+            yield _sse(
+                {"event": "run_done", "wall_clock_ms": round((time.monotonic() - started) * 1000, 1)}
+            )
+        finally:
+            await _cancel_sessions(tasks)
 
     return StreamingResponse(
         event_stream(),

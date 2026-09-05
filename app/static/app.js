@@ -86,6 +86,10 @@ function renderSidebar(data) {
 function selectScenario(id) {
   const sc = state.scenarios.find((s) => s.id === id);
   if (!sc) return;
+  // Переключение сценария обрывает текущий прогон. Иначе старый EventSource
+  // остаётся открытым и продолжает слать события, а колонки он ищет по label —
+  // совпавший label нового сценария принял бы чужой текст.
+  stopRun();
   state.current = sc;
   state.overrides = {};
   document.querySelectorAll("#scenario-list li").forEach((li) => {
@@ -529,6 +533,27 @@ async function sendManual(col) {
 
 // --- прогон сценария ---
 
+// Кнопка «Старт» снова рабочая, колонки больше не «генерируют».
+function resetRunUi() {
+  state.running = false;
+  const btn = $("#start-btn");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Старт";
+  }
+  state.columns.forEach((col) => setBusy(col, false));
+}
+
+// Обрывает активный прогон и забывает поток: всё, что придёт по нему после
+// этого, уже не относится к тому, что на экране.
+function stopRun() {
+  if (state.source) {
+    state.source.close();
+    state.source = null;
+  }
+  resetRunUi();
+}
+
 function startRun() {
   if (!state.current || state.running) return;
   const btn = $("#start-btn");
@@ -553,10 +578,8 @@ function startRun() {
   let gotEvent = false;
 
   const finish = () => {
-    state.running = false;
-    btn.disabled = false;
-    btn.textContent = "Старт";
-    state.columns.forEach((col) => setBusy(col, false));
+    state.source = null;
+    resetRunUi();
   };
 
   const qs = Object.keys(state.overrides).length
@@ -564,6 +587,10 @@ function startRun() {
     : "";
   const source = new EventSource(`/api/run/${state.current.id}${qs}`);
   state.source = source;
+
+  // Поток принадлежит тому сценарию, на котором его запустили. Если он больше
+  // не текущий — его успели оборвать, и всё пришедшее по нему отбрасывается.
+  const isCurrent = () => state.source === source;
 
   // Обрыв потока EventSource сообщает без причины и без текста. Молчать здесь
   // нельзя: колонка так и осталась бы в «генерация…», а на записи это
@@ -584,6 +611,10 @@ function startRun() {
   };
 
   source.onmessage = (ev) => {
+    if (!isCurrent()) {
+      source.close();
+      return;
+    }
     const e = JSON.parse(ev.data);
     gotEvent = true;
     const col = e.session ? state.columns.get(e.session) : null;
@@ -648,7 +679,7 @@ function startRun() {
 
   source.onerror = () => {
     source.close();
-    abort();
+    if (isCurrent()) abort();
   };
 }
 
