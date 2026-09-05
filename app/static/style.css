@@ -9,6 +9,9 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --bad: #f87171;
+  --bubble-user: #1b2334;
+  --bubble-user-line: #33507e;
+  --bubble-system: #161922;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -136,10 +139,12 @@ button.start:disabled { opacity: .5; cursor: default; }
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px 10px;
+  /* Узкая колонка split — две метрики в ряд, широкая single — сколько влезет:
+     цифры не должны разъезжаться от подписей на всю ширину. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 2px 14px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
   background: var(--panel-2);
   font-size: 12px;
 }
@@ -149,10 +154,61 @@ button.start:disabled { opacity: .5; cursor: default; }
 .stat .v.length { color: var(--warn); }
 .stat .v.err { color: var(--bad); }
 
-.output { padding: 12px 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-y: auto; max-height: 46vh; flex: 1; }
-.repeat { border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 8px; }
-.repeat:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
-.repeat .rlabel { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+/* Лента чата: промпт виден до «Старта», ответ дописывается под ним. */
+.chat {
+  flex: 1;
+  padding: 12px 14px;
+  overflow-y: auto;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat .prompt { display: flex; flex-direction: column; gap: 10px; }
+
+.msg { font-size: 13px; line-height: 1.5; border-radius: 10px; }
+.msg .role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* system — служебная инструкция: мельче, приглушённее, сворачивается по клику */
+.msg.system {
+  background: var(--bubble-system);
+  border: 1px dashed var(--line);
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.msg.system > summary {
+  cursor: pointer;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  color: var(--muted);
+  list-style: none;
+}
+.msg.system > summary::-webkit-details-marker { display: none; }
+.msg.system > summary::before { content: "▾ "; }
+.msg.system:not([open]) > summary::before { content: "▸ "; }
+.msg.system .body { margin-top: 6px; }
+
+/* user — это и есть промпт */
+.msg.user {
+  background: var(--bubble-user);
+  border: 1px solid var(--bubble-user-line);
+  padding: 10px 12px;
+}
+
+/* assistant — ответ модели, стримится сюда */
+.msg.assistant { border-left: 2px solid var(--accent); padding: 2px 0 2px 10px; }
+
+.ph { color: var(--warn); background: rgba(251, 191, 36, .12); border-radius: 4px; padding: 0 3px; }
+.dep-hint { font-size: 11px; color: var(--warn); line-height: 1.4; }
 .column .status { padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
 .column .status.waiting { color: var(--warn); }
 .column .status.error { color: var(--bad); }
