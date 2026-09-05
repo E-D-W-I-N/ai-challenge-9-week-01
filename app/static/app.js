@@ -860,8 +860,16 @@ function startRun() {
             if (e.metrics.total_tokens) totals.tokens += e.metrics.total_tokens;
           }
           if (e.repeats > 1) {
-            col.statsNote.textContent = `метрики последнего прогона из ${e.repeats}`;
-            updateUniq(col);
+            // Серия, из которой не выжил ни один прогон, — это провал колонки,
+            // а не «готово»: ответов ноль, и строка состояния обязана это
+            // сказать, иначе она противоречит красным блокам в ленте.
+            if (!(e.texts || []).length) {
+              setStatus(col, "error", `ни один прогон не удался — 0 из ${e.repeats}`);
+              col.statsNote.textContent = "метрик удачных прогонов нет";
+            } else {
+              col.statsNote.textContent = `метрики последнего прогона из ${e.repeats}`;
+              updateUniq(col);
+            }
           }
           if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
           // Ответ сценария становится частью диалога: следующий ручной
