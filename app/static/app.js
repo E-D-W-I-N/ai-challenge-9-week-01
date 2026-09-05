@@ -373,9 +373,6 @@ function renderColumns(sessions, layout) {
       stats.appendChild(row);
     });
 
-    const uniq = document.createElement("div");
-    uniq.className = "uniq hidden";
-
     const status = document.createElement("div");
     status.className = "status";
     status.textContent = "ожидание";
@@ -388,20 +385,17 @@ function renderColumns(sessions, layout) {
       values,
       chat,
       promptBox,
-      uniq,
       status,
       dependsOn: s.depends_on || null,
       base: (s.messages || []).map((m) => ({ role: m.role, content: m.content })),
       turns: [],          // всё, что добавилось после промпта сценария
-      repeats: new Map(),
-      texts: [],
-      lastText: "",
+      answer: null,       // тело ответа сценария, в него стримятся delta
       lastMetrics: null,
       busy: false,
     };
 
     // Лента скроллится, метрики и поле ввода остаются на месте.
-    col.append(head, chat, uniq, stats, status, buildComposer(entry));
+    col.append(head, chat, stats, status, buildComposer(entry));
     box.appendChild(col);
 
     renderPrompt(entry, entry.base, false);
@@ -409,11 +403,10 @@ function renderColumns(sessions, layout) {
   });
 }
 
-function answerBlock(col, index, total) {
-  if (col.repeats.has(index)) return col.repeats.get(index);
-  const body = appendMessage(col, "assistant", "", total > 1 ? `assistant · прогон ${index + 1} из ${total}` : null);
-  col.repeats.set(index, body);
-  return body;
+// Ответ сценария — одно сообщение assistant на колонку.
+function answerBlock(col) {
+  if (!col.answer) col.answer = appendMessage(col, "assistant", "");
+  return col.answer;
 }
 
 function applyMetrics(col, metrics) {
@@ -577,7 +570,6 @@ function startRun() {
       case "session_start":
         if (col) {
           setStatus(col, "", "генерация…");
-          col.repeatsTotal = e.repeats;
           // Для колонки с depends_on это первый момент, когда известен
           // итоговый промпт: заменяем предварительный текст на него.
           if (e.resolved_messages) {
@@ -586,12 +578,9 @@ function startRun() {
           }
         }
         break;
-      case "repeat_start":
-        if (col) answerBlock(col, e.repeat, col.repeatsTotal || 1);
-        break;
       case "delta":
         if (col) {
-          answerBlock(col, e.repeat, col.repeatsTotal || 1).textContent += e.text;
+          answerBlock(col).textContent += e.text;
           applyMetrics(col, e.metrics);
           scrollChat(col);
         }
@@ -599,23 +588,6 @@ function startRun() {
       case "metrics":
         if (col) applyMetrics(col, e.metrics);
         break;
-      case "repeat_done":
-        if (col) {
-          applyMetrics(col, e.metrics);
-          col.lastText = (e.text || "").trim();
-          col.texts.push(col.lastText);
-          if (e.metrics.cost_usd) totals.cost += e.metrics.cost_usd;
-          if (e.metrics.total_tokens) totals.tokens += e.metrics.total_tokens;
-          if ((col.repeatsTotal || 1) > 1) {
-            const uniqueCount = new Set(col.texts).size;
-            col.uniq.classList.remove("hidden");
-            col.uniq.textContent =
-              `уникальных ответов: ${uniqueCount} из ${col.texts.length}` +
-              ` (${Math.round((100 * uniqueCount) / col.texts.length)} %)`;
-          }
-        }
-        break;
-      case "repeat_error":
       case "session_error":
         if (col) {
           setStatus(col, "error", e.message);
@@ -624,10 +596,16 @@ function startRun() {
         break;
       case "session_done":
         if (col) {
+          applyMetrics(col, e.metrics);
+          if (e.metrics) {
+            if (e.metrics.cost_usd) totals.cost += e.metrics.cost_usd;
+            if (e.metrics.total_tokens) totals.tokens += e.metrics.total_tokens;
+          }
           if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
           // Ответ сценария становится частью диалога: следующий ручной
           // вопрос уйдёт в модель вместе с ним.
-          if (col.lastText) col.turns.push({ role: "assistant", content: col.lastText });
+          const answer = (e.text || "").trim();
+          if (answer) col.turns.push({ role: "assistant", content: answer });
           setBusy(col, false);
         }
         totals.done += 1;
