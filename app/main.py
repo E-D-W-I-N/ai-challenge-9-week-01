@@ -522,10 +522,14 @@ def _judge_messages(
     scenario: Scenario, sessions: list[Session], results: dict[str, _Outcome]
 ) -> list[dict]:
     questions = "\n".join(f"{i}. {q}" for i, q in enumerate(scenario.judge_questions, 1))
+    # watch_for судье не уходит намеренно: это режиссёрская подсказка ведущему,
+    # в ней по замыслу написано, какая колонка что покажет и где ошибётся.
+    # Отдавать её судье — значит показывать ему ответ до того, как он посмотрит
+    # на данные, и заодно заставлять авторов дней портить поле, написанное
+    # для человека, ради чистоты вердикта.
     blocks = [
         f"Сценарий: {scenario.title}",
         f"Что демонстрируем: {scenario.description}",
-        f"На что смотреть: {scenario.watch_for}",
         "",
         "Вопросы задания:",
         questions,
