@@ -545,6 +545,12 @@ function startRun() {
   state.columns.forEach((col) => setBusy(col, true));
 
   const totals = { cost: 0, tokens: 0, done: 0, expected: sessions.length };
+  // Ход прогона по колонкам: нужен, чтобы при обрыве объяснить происходящее
+  // именно тем колонкам, которые всё ещё чего-то ждут.
+  const started = new Set();   // пришёл session_start
+  const settled = new Set();   // пришёл session_done или session_error
+  const startedAt = performance.now();
+  let gotEvent = false;
 
   const finish = () => {
     state.running = false;
@@ -559,8 +565,27 @@ function startRun() {
   const source = new EventSource(`/api/run/${state.current.id}${qs}`);
   state.source = source;
 
+  // Обрыв потока EventSource сообщает без причины и без текста. Молчать здесь
+  // нельзя: колонка так и осталась бы в «генерация…», а на записи это
+  // неотличимо от медленной модели. Объясняем обрыв каждой колонке, которая
+  // его не дождалась, и подводим итог по тому, что успело досчитаться.
+  const abort = () => {
+    const reason = gotEvent
+      ? "соединение со стендом оборвано"
+      : "стенд недоступен";
+    state.columns.forEach((col, label) => {
+      if (settled.has(label)) return;
+      setStatus(col, "error", started.has(label)
+        ? `${reason} — ответ не дописан`
+        : `${reason} — колонка не запускалась`);
+    });
+    finish();
+    if (totals.done) renderSummary(totals, performance.now() - startedAt, true);
+  };
+
   source.onmessage = (ev) => {
     const e = JSON.parse(ev.data);
+    gotEvent = true;
     const col = e.session ? state.columns.get(e.session) : null;
 
     switch (e.event) {
@@ -568,6 +593,7 @@ function startRun() {
         if (col) setStatus(col, "waiting", `ждёт вывод колонки «${e.on}»`);
         break;
       case "session_start":
+        started.add(e.session);
         if (col) {
           setStatus(col, "", "генерация…");
           // Для колонки с depends_on это первый момент, когда известен
@@ -589,12 +615,14 @@ function startRun() {
         if (col) applyMetrics(col, e.metrics);
         break;
       case "session_error":
+        settled.add(e.session);
         if (col) {
           setStatus(col, "error", e.message);
           applyMetrics(col, e.metrics);
         }
         break;
       case "session_done":
+        settled.add(e.session);
         if (col) {
           applyMetrics(col, e.metrics);
           if (e.metrics) {
@@ -620,20 +648,25 @@ function startRun() {
 
   source.onerror = () => {
     source.close();
-    finish();
+    abort();
   };
 }
 
-// Сравнение колонок имеет смысл только когда колонок больше одной:
-// «самая быстрая» на единственной колонке сравнивать не с чем.
-function renderSummary(totals, wallClockMs) {
+// Сравнение колонок имеет смысл только когда колонок больше одной: «самая
+// быстрая» на единственной колонке сравнивать не с чем. На прерванном прогоне
+// сравнения нет вовсе — часть колонок не отработала, и победитель среди
+// уцелевших сказал бы неправду. Остаются итоги по тому, что успело досчитаться.
+function renderSummary(totals, wallClockMs, interrupted) {
   const rows = [
     ["суммарная стоимость", fmtCost(totals.cost)],
     ["суммарно токенов", String(totals.tokens)],
-    ["wall-clock", fmtMs(wallClockMs)],
+    [interrupted ? "wall-clock до обрыва" : "wall-clock", fmtMs(wallClockMs)],
   ];
+  if (interrupted) {
+    rows.unshift(["прогон", `прерван · ${totals.done} из ${totals.expected} колонок`]);
+  }
 
-  if (state.columns.size > 1) {
+  if (!interrupted && state.columns.size > 1) {
     const cols = [...state.columns.entries()]
       .map(([label, c]) => ({ label, m: c.lastMetrics }))
       .filter((x) => x.m && !x.m.error);
