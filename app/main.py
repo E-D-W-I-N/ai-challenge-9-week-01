@@ -40,9 +40,11 @@ def _session_public(session: Session) -> dict:
     return data
 
 
-def _scenario_public(scenario: Scenario) -> dict:
+def _scenario_public(scenario: Scenario, day: str = "", day_title: str = "") -> dict:
     return {
         "id": scenario.id,
+        "day": day,
+        "day_title": day_title,
         "title": scenario.title,
         "description": scenario.description,
         "watch_for": scenario.watch_for,
@@ -53,10 +55,24 @@ def _scenario_public(scenario: Scenario) -> dict:
 
 @app.get("/api/scenarios")
 async def list_scenarios() -> dict:
-    scenarios = registry.discover()
+    """Плоский список в порядке дней плюс группировка: сайдбар рисует дни заголовками."""
+    days = registry.discover_days()
+    scenarios = [
+        _scenario_public(scenario, day.id, day.title)
+        for day in days
+        for scenario in day.scenarios
+    ]
     return {
         "has_key": has_key(),
-        "scenarios": [_scenario_public(s) for s in scenarios],
+        "scenarios": scenarios,
+        "days": [
+            {
+                "id": day.id,
+                "title": day.title,
+                "scenario_ids": [s.id for s in day.scenarios],
+            }
+            for day in days
+        ],
         "errors": registry.errors(),
     }
 
