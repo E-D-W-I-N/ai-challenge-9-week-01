@@ -199,6 +199,17 @@ button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(
   flex-direction: column;
   overflow: hidden;
 }
+
+/* layout="single": колонка занимает всю доступную ширину, но текст в ленте
+   не тянется на всю эту ширину — лента и поле ввода держат комфортную для
+   чтения меру (~80 символов) и центрируются внутри колонки, как в чат-клиентах.
+   Сама панель колонки, её шапка и метрики остаются во всю ширину. */
+.columns.single {
+  --measure: 640px;
+}
+.columns.single .chat { padding-inline: max(14px, (100% - var(--measure)) / 2); }
+.columns.single .composer { padding-inline: max(12px, (100% - var(--measure)) / 2); }
+
 .column header { flex: 0 0 auto; padding: 11px 14px; border-bottom: 1px solid var(--line); }
 .column h3 { margin: 0; font-size: 14px; }
 .column .note { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
