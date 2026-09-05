@@ -32,24 +32,53 @@ async function loadScenarios() {
   badge.textContent = data.has_key ? "OPENROUTER_API_KEY найден" : "нет .env с OPENROUTER_API_KEY";
   badge.className = "badge " + (data.has_key ? "ok" : "bad");
 
-  const list = $("#scenario-list");
-  list.innerHTML = "";
-  if (!data.scenarios.length) {
-    list.innerHTML = '<li class="muted">Сценариев нет — ни одной day-*/scenario.py</li>';
-  }
-  data.scenarios.forEach((sc) => {
-    const li = document.createElement("li");
-    li.innerHTML = `${sc.title}<span class="sid">${sc.id}</span>`;
-    li.onclick = () => selectScenario(sc.id);
-    li.dataset.id = sc.id;
-    list.appendChild(li);
-  });
+  renderSidebar(data);
 
   const errBox = $("#registry-errors");
   const errs = Object.entries(data.errors || {});
   errBox.textContent = errs.length
     ? errs.map(([k, v]) => `${k}:\n${v}`).join("\n\n")
     : "";
+}
+
+// Сайдбар группирует сценарии по дням: заголовок дня, под ним его сценарии
+// в порядке из SCENARIOS. Дни приходят с бэка уже отсортированными по номеру.
+function renderSidebar(data) {
+  const list = $("#scenario-list");
+  list.innerHTML = "";
+  if (!data.scenarios.length) {
+    list.innerHTML = '<p class="empty-hint">Сценариев нет — ни одной day-*/scenario.py</p>';
+    return;
+  }
+
+  const byDay = new Map();
+  data.scenarios.forEach((sc) => {
+    const key = sc.day || "";
+    if (!byDay.has(key)) byDay.set(key, { title: sc.day_title || sc.day || "Сценарии", items: [] });
+    byDay.get(key).items.push(sc);
+  });
+
+  byDay.forEach((group) => {
+    const box = document.createElement("div");
+    box.className = "day-group";
+
+    const head = document.createElement("div");
+    head.className = "day-title";
+    head.textContent = group.title;
+
+    const ul = document.createElement("ul");
+    ul.className = "day-scenarios";
+    group.items.forEach((sc) => {
+      const li = document.createElement("li");
+      li.innerHTML = `${sc.title}<span class="sid">${sc.id}</span>`;
+      li.onclick = () => selectScenario(sc.id);
+      li.dataset.id = sc.id;
+      ul.appendChild(li);
+    });
+
+    box.append(head, ul);
+    list.appendChild(box);
+  });
 }
 
 function selectScenario(id) {
