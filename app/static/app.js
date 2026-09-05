@@ -488,14 +488,30 @@ async function sendManual(col) {
   col.input.value = "";
   autoGrow(col.input);
   // Вопрос уходит в модель вместе со всей лентой: диалог продолжается.
-  col.turns.push({ role: "user", content: text });
-  appendMessage(col, "user", text);
+  const question = { role: "user", content: text };
+  col.turns.push(question);
+  const questionBox = appendMessage(col, "user", text).parentElement;
 
   const body = appendMessage(col, "assistant", "");
   setBusy(col, true);
   setStatus(col, "", "генерация…");
 
+  // Обмен не состоялся: вопрос нельзя оставлять ни в ленте, ни в col.turns —
+  // иначе он уйдёт в модель ещё раз, вторым user-сообщением подряд, а в кадре
+  // этого не видно. Текст возвращается в поле ввода, чтобы можно было повторить.
+  const rollback = () => {
+    const i = col.turns.lastIndexOf(question);
+    if (i >= 0) col.turns.splice(i, 1);
+    questionBox.remove();
+    body.parentElement.remove();
+    if (!col.input.value) {
+      col.input.value = text;
+      autoGrow(col.input);
+    }
+  };
+
   let answer = "";
+  let failed = false;
   try {
     await streamChat(columnPayload(col), (e) => {
       switch (e.event) {
@@ -509,6 +525,7 @@ async function sendManual(col) {
           applyMetrics(col, e.metrics);
           break;
         case "error":
+          failed = true;
           applyMetrics(col, e.metrics);
           setStatus(col, "error", e.message);
           break;
@@ -519,16 +536,21 @@ async function sendManual(col) {
           break;
       }
     });
-    if (answer) {
-      col.turns.push({ role: "assistant", content: answer });
-      if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
-    }
   } catch (err) {
+    failed = true;
     setStatus(col, "error", String(err.message || err));
-  } finally {
-    setBusy(col, false);
-    scrollChat(col);
   }
+
+  if (answer) {
+    // Ответ есть — он часть диалога, даже если поток оборвался на середине.
+    col.turns.push({ role: "assistant", content: answer });
+    if (!col.status.classList.contains("error")) setStatus(col, "", "готово");
+  } else if (failed) {
+    rollback();
+  }
+
+  setBusy(col, false);
+  scrollChat(col);
 }
 
 // --- прогон сценария ---
