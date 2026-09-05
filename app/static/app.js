@@ -8,6 +8,7 @@ const state = {
   columns: new Map(), // label -> DOM refs + лента диалога
   source: null,
   running: false,
+  judge: null,        // блок «Вердикт» текущего прогона
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -97,6 +98,7 @@ function selectScenario(id) {
   });
   renderScenarioBar(sc);
   renderColumns(sc.sessions, sc.layout);
+  resetVerdict();
   $("#summary").classList.add("hidden");
 }
 
@@ -553,6 +555,89 @@ async function sendManual(col) {
   scrollChat(col);
 }
 
+// --- блок «Вердикт»: ответ модели-судьи на вопросы задания дня ---
+
+// Судья вызывается только у сценариев с judge_questions, поэтому блока
+// может не быть вовсе — тогда его просто не показываем.
+function resetVerdict() {
+  state.judge = null;
+  const box = $("#verdict");
+  box.className = "verdict hidden";
+  box.innerHTML = "";
+}
+
+function verdictBox(modelLine) {
+  const box = $("#verdict");
+  box.className = "verdict";
+  box.innerHTML = `<header><h3>Вердикт</h3><div class="judge-model"></div>
+    <div class="judge-conflict hidden"></div></header>
+    <div class="verdict-body"></div><div class="verdict-status"></div>`;
+  box.querySelector(".judge-model").textContent = modelLine;
+  return {
+    root: box,
+    model: box.querySelector(".judge-model"),
+    conflict: box.querySelector(".judge-conflict"),
+    body: box.querySelector(".verdict-body"),
+    status: box.querySelector(".verdict-status"),
+    text: "",
+    cost: null,
+  };
+}
+
+function verdictStatus(kind, text) {
+  if (!state.judge) return;
+  state.judge.status.className = "verdict-status" + (kind ? " " + kind : "");
+  state.judge.status.textContent = text;
+}
+
+function startVerdict(e) {
+  const judge = verdictBox("судит " + e.model);
+  // Пока судья молчит, в кадре должно быть видно, что он работает,
+  // а не пустой блок.
+  judge.root.classList.add("busy");
+  if (e.conflicts && e.conflicts.length) {
+    judge.conflict.classList.remove("hidden");
+    judge.conflict.textContent =
+      "судья совпал с моделью колонки " + e.conflicts.map((c) => `«${c}»`).join(", ");
+  }
+  state.judge = judge;
+  verdictStatus("", "судья читает ответы колонок…");
+}
+
+function appendVerdict(text) {
+  if (!state.judge) return;
+  state.judge.text += text;
+  state.judge.body.textContent = state.judge.text;
+  state.judge.body.scrollTop = state.judge.body.scrollHeight;
+  verdictStatus("", "судья пишет…");
+}
+
+function finishVerdict(e) {
+  if (!state.judge) return;
+  state.judge.root.classList.remove("busy");
+  if (e.text) {
+    state.judge.text = e.text;
+    state.judge.body.textContent = e.text;
+  }
+  if (e.metrics && e.metrics.cost_usd !== null && e.metrics.cost_usd !== undefined) {
+    state.judge.cost = e.metrics.cost_usd;
+  }
+  verdictStatus("", "готово");
+}
+
+// Вердикт — надстройка над прогоном: его ошибка не трогает ни колонки,
+// ни сводку, только сам блок.
+function failVerdict(message) {
+  if (!state.judge) state.judge = verdictBox("судья");
+  state.judge.root.classList.remove("busy");
+  verdictStatus("error", message);
+}
+
+function skipVerdict(message) {
+  state.judge = verdictBox("судья не вызывался");
+  verdictStatus("", message);
+}
+
 // --- прогон сценария ---
 
 // Кнопка «Старт» снова рабочая, колонки больше не «генерируют».
@@ -588,6 +673,7 @@ function startRun() {
     ...(state.overrides[s.label] || {}),
   }));
   renderColumns(sessions, state.current.layout);
+  resetVerdict();
   $("#summary").classList.add("hidden");
   state.columns.forEach((col) => setBusy(col, true));
 
@@ -691,6 +777,21 @@ function startRun() {
         }
         totals.done += 1;
         break;
+      case "judge_start":
+        startVerdict(e);
+        break;
+      case "judge_delta":
+        appendVerdict(e.text);
+        break;
+      case "judge_done":
+        finishVerdict(e);
+        break;
+      case "judge_error":
+        failVerdict(e.message);
+        break;
+      case "judge_skipped":
+        skipVerdict(e.message);
+        break;
       case "run_done":
         source.close();
         finish();
@@ -717,6 +818,11 @@ function renderSummary(totals, wallClockMs, interrupted) {
   ];
   if (interrupted) {
     rows.unshift(["прогон", `прерван · ${totals.done} из ${totals.expected} колонок`]);
+  }
+  // Отдельной строкой: видно, во что обошёлся вердикт, и это не смешано
+  // с суммой по колонкам.
+  if (state.judge && state.judge.cost !== null && state.judge.cost !== undefined) {
+    rows.push(["стоимость судьи", fmtCost(state.judge.cost)]);
   }
 
   if (!interrupted && state.columns.size > 1) {
