@@ -103,27 +103,15 @@ function selectScenario(id) {
 }
 
 // Шапка сценария — одна компактная строка: название, модели, «Старт».
-// description и watch_for живут в сворачиваемом блоке, закрытом по умолчанию.
+// description и watch_for стенд не показывает: description уходит судье,
+// на экране от него только лишняя высота, которой не хватает колонкам.
 function renderScenarioBar(sc) {
   const bar = $("#scenario-bar");
   bar.innerHTML = `
     <h2 class="scenario-title">${sc.title}</h2>
     <div id="pickers" class="pickers"></div>
-    <button class="ghost" id="about-btn" aria-expanded="false">О сценарии</button>
     <button class="start" id="start-btn">Старт</button>`;
 
-  const about = $("#about");
-  about.classList.add("hidden");
-  about.innerHTML = `
-    <p>${sc.description}</p>
-    <p class="watch"><strong>На что смотреть:</strong> ${sc.watch_for}</p>`;
-
-  const aboutBtn = $("#about-btn");
-  aboutBtn.onclick = () => {
-    const open = !about.classList.toggle("hidden");
-    aboutBtn.setAttribute("aria-expanded", String(open));
-    aboutBtn.classList.toggle("active", open);
-  };
   $("#start-btn").onclick = startRun;
   buildPickers(sc);
 }
