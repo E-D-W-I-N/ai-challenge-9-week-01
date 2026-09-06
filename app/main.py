@@ -148,10 +148,10 @@ def _sampling_fields(payload: dict, where: str = "") -> dict:
 def _parse_overrides(raw: str, sessions: list[Session]) -> dict[str, dict]:
     """Разбирает query-параметр overrides у /api/run.
 
-    Проверок ровно столько же, сколько у тела /api/chat, и теми же функциями:
-    кривой ввод обязан получить 400 с текстом, а не 500. До этой проверки
-    список вместо объекта ронял AttributeError, лишний ключ — TypeError
-    в Session(**fields), а «label» в патче молча переименовывал колонку.
+    Проверяет ввод тем же кодом, что и тело /api/chat: кривой ввод обязан
+    получить 400 с текстом, а не 500. До этой проверки список вместо объекта
+    ронял AttributeError, лишний ключ — TypeError в Session(**fields),
+    а «label» в патче молча переименовывал колонку.
     """
     if not raw:
         return {}
@@ -191,7 +191,7 @@ def _parse_overrides(raw: str, sessions: list[Session]) -> dict[str, dict]:
         sampling = _sampling_fields(fields, where)
         patched: dict = {}
         # Берём только те поля, что клиент прислал: явный null снимает значение
-        # сценария, а отсутствие ключа его не трогает.
+        # сценария, а пропущенный ключ его не трогает.
         if "model" in fields:
             patched["model"] = _model_field(fields, where)
         for name in ("temperature", "max_tokens"):
@@ -385,9 +385,9 @@ async def _run_session(
         start_event = {
             "event": "session_start",
             "session": label,
-            # Лента чата перерисовывается по resolved_messages: для колонки
-            # с depends_on это единственный момент, когда виден итоговый
-            # промпт после подстановки вывода соседней колонки.
+            # По resolved_messages клиент перерисовывает ленту чата: для
+            # колонки с depends_on это единственный момент, когда виден
+            # итоговый промпт после подстановки вывода соседней колонки.
             "resolved_messages": [
                 {"role": m.get("role", "?"), "content": m.get("content", "")} for m in messages
             ],
@@ -510,8 +510,8 @@ async def _run_session(
             {"event": "session_error", "session": label, "message": f"{type(exc).__name__}: {exc}"}
         )
     finally:
-        # Исход записывается всегда: зависимая колонка должна узнать и об успехе,
-        # и о падении, а не гадать по отсутствию записи.
+        # Исход пишем всегда: зависимая колонка должна узнать и об успехе,
+        # и о падении, а не гадать, почему записи нет.
         results[label] = outcome
         event = ready.get(label)
         if event is not None:
