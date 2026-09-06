@@ -14,19 +14,27 @@
     </header>
 
     <main class="layout">
-      <aside class="sidebar">
-        <h2>Сценарии</h2>
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-head">
+          <h2>Сценарии</h2>
+          <button id="sidebar-toggle" class="sidebar-toggle" type="button"
+                  aria-controls="scenario-list" aria-expanded="true"></button>
+        </div>
         <div id="scenario-list" class="scenario-list"></div>
         <div id="registry-errors" class="errors"></div>
       </aside>
 
       <section class="content">
-        <div id="scenario-bar" class="scenario-bar">
-          <p class="hint">Выберите сценарий слева.</p>
+        <!-- Кадр прогона: всё, что должно оставаться в экране целиком. -->
+        <div class="stage">
+          <div id="scenario-bar" class="scenario-bar">
+            <p class="hint">Выберите сценарий слева.</p>
+          </div>
+
+          <div id="columns" class="columns"></div>
         </div>
 
-        <div id="columns" class="columns"></div>
-
+        <!-- Вердикт и сводка уезжают под кадр: к ним прокручиваются. -->
         <div id="verdict" class="verdict hidden"></div>
 
         <div id="summary" class="summary hidden"></div>

@@ -647,7 +647,6 @@ function appendVerdict(text) {
   if (!state.judge) return;
   state.judge.text += text;
   state.judge.body.textContent = state.judge.text;
-  state.judge.body.scrollTop = state.judge.body.scrollHeight;
   verdictStatus("", "судья пишет…");
 }
 
@@ -937,4 +936,42 @@ function renderSummary(totals, wallClockMs, interrupted) {
     .join("");
 }
 
+// --- сворачивание сайдбара ---
+
+// Во время записи список сценариев нужен только в момент выбора: дальше это
+// ширина, которой не хватает колонкам. Состояние переживает перезагрузку —
+// после `--reload` ведущему не приходится сворачивать заново.
+const SIDEBAR_KEY = "ui.sidebar.collapsed";
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch (e) {
+    return false;   // приватный режим или запрет на хранилище — не повод падать
+  }
+}
+
+function applySidebar(collapsed) {
+  const btn = $("#sidebar-toggle");
+  $("#sidebar").classList.toggle("collapsed", collapsed);
+  btn.textContent = collapsed ? "›" : "‹";
+  btn.title = collapsed ? "Показать сценарии" : "Свернуть сценарии";
+  btn.setAttribute("aria-label", btn.title);
+  btn.setAttribute("aria-expanded", String(!collapsed));
+}
+
+function initSidebar() {
+  applySidebar(readCollapsed());
+  $("#sidebar-toggle").onclick = () => {
+    const collapsed = !$("#sidebar").classList.contains("collapsed");
+    applySidebar(collapsed);
+    try {
+      localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
+    } catch (e) {
+      /* не сохранилось — свернуть всё равно можно, просто забудется */
+    }
+  };
+}
+
+initSidebar();
 loadScenarios();

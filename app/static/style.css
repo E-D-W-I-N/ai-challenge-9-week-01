@@ -25,7 +25,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  overflow: hidden;            /* страница целиком не скроллится ни по одной оси */
+  overflow: hidden;            /* горизонтального скролла нет ни при какой ширине */
 }
 
 /* Каркас на всю высоту экрана: шапка + рабочая область. */
@@ -67,8 +67,36 @@ body {
   background: var(--panel);
   overflow-y: auto;
   min-height: 0;
+  transition: width .18s ease, flex-basis .18s ease, padding .18s ease;
 }
-.sidebar h2 { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .8px; margin: 0 0 12px; }
+.sidebar-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.sidebar h2 { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .8px; margin: 0; flex: 1 1 auto; }
+
+/* Кнопка сворачивания: на виду, но приглушённая — в кадре она не должна
+   спорить со списком сценариев. */
+.sidebar-toggle {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+.sidebar-toggle:hover { color: var(--text); border-color: var(--accent); }
+
+/* Свёрнутый сайдбар — узкая полоса: кнопка и вертикальная подпись,
+   по которой видно, что за ней список сценариев. */
+.sidebar.collapsed { width: 44px; flex-basis: 44px; padding: 16px 9px; overflow: hidden; }
+.sidebar.collapsed .sidebar-head { flex-direction: column-reverse; gap: 12px; margin-bottom: 0; }
+.sidebar.collapsed h2 { writing-mode: vertical-rl; flex: 0 0 auto; }
+.sidebar.collapsed .scenario-list,
+.sidebar.collapsed .errors { display: none; }
 
 .scenario-list { list-style: none; margin: 0; padding: 0; }
 .day-group + .day-group { margin-top: 14px; }
@@ -108,7 +136,21 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 14px 18px 16px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Кадр прогона: шапка сценария, «О сценарии» и колонки. Его высота — ровно
+   видимая область, и она не зависит от того, что появилось ниже. Поэтому
+   вердикт и сводка уезжают вниз под скролл, а не отбирают высоту у колонок. */
+.stage {
+  flex: 1 0 auto;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* Шапка сценария: название, модели, «Старт» — одной строкой. */
@@ -387,15 +429,13 @@ button.start:disabled { opacity: .5; cursor: default; }
 }
 .judge-conflict { font-size: 11px; color: var(--warn); }
 
-/* Вердикт должен помещаться в кадр вместе со сводкой, поэтому лента
-   вердикта скроллится, а не растёт вниз без предела. */
+/* Вердикт печатается вниз во всю длину: высоту у колонок он не отбирает,
+   а страница получает вертикальный скролл. */
 .verdict-body {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 24vh;
-  overflow-y: auto;
 }
 .verdict-status { margin-top: 8px; font-size: 11px; color: var(--muted); }
 .verdict-status.error { color: var(--bad); }
@@ -435,6 +475,7 @@ button.start:disabled { opacity: .5; cursor: default; }
 
 @media (prefers-reduced-motion: reduce) {
   .msg { animation: none; }
+  .sidebar { transition: none; }
   .chat { scroll-behavior: auto; }
 }
 
@@ -459,7 +500,13 @@ button.start:disabled { opacity: .5; cursor: default; }
     overflow-x: auto;
     overflow-y: hidden;
   }
-  .sidebar > h2 { display: none; }
+  .sidebar-head { margin-bottom: 0; }
+  .sidebar-head h2 { display: none; }
+  /* Полосой сверху сайдбар сворачивается в ту же кнопку, только список
+     прячется целиком, а ширину полоса не отдаёт — её и так нет. */
+  .sidebar.collapsed { width: auto; flex-basis: auto; padding: 10px 12px; }
+  .sidebar.collapsed .sidebar-head { flex-direction: row; gap: 8px; }
+  .sidebar.collapsed h2 { display: block; writing-mode: horizontal-tb; }
   .scenario-list { display: flex; gap: 14px; }
   .day-group + .day-group { margin-top: 0; }
   .day-title { border-bottom: 0; padding: 0 0 4px; }
@@ -468,6 +515,7 @@ button.start:disabled { opacity: .5; cursor: default; }
   .errors { display: none; }
 
   .content { padding: 12px; gap: 10px; }
+  .stage { gap: 10px; }
   .scenario-bar { gap: 8px; }
   .scenario-title { white-space: normal; font-size: 16px; flex: 1 1 100%; }
   .pickers { flex: 1 1 100%; }
