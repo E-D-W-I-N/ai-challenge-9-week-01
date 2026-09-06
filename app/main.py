@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -299,10 +299,16 @@ class _Outcome:
     """Чем закончилась колонка. Нужно тем, кто ждёт её вывод по depends_on."""
 
     text: str = ""
+    """Последний успешный ответ: его подставляет depends_on."""
+
+    texts: list[str] = field(default_factory=list)
+    """Все успешные ответы серии. При repeats=1 — список из одного элемента."""
+
     ok: bool = False
     finish_reason: str | None = None
     error: str | None = None
     metrics: dict | None = None
+    """Метрики последнего успешного прогона."""
 
 
 def _donor_problem(donor_label: str, donor: _Outcome | None) -> str | None:
@@ -386,6 +392,10 @@ async def _run_session(
                 {"role": m.get("role", "?"), "content": m.get("content", "")} for m in messages
             ],
         }
+        if session.repeats > 1:
+            # Клиенту нужна длина серии заранее: он подписывает блоки
+            # «прогон N из M» с первого же прогона.
+            start_event["repeats"] = session.repeats
         if donor is not None:
             # Обрыв донора по max_tokens: подставили урезанный промпт — UI
             # помечает это в подписи под лентой, чтобы не гадать на записи.
@@ -396,55 +406,101 @@ async def _run_session(
             }
         await queue.put(start_event)
 
-        text = ""
-        final_metrics = None
+        total = max(1, session.repeats)
+        # При repeats=1 поток остаётся ровно таким, каким был до появления
+        # повторов: ни repeat-событий, ни поля repeat. Сценарии, которые
+        # повторов не просили, не должны ничего заметить.
+        multi = total > 1
+
+        texts: list[str] = []
+        last_metrics: dict | None = None
         failure: str | None = None
-        async for chunk in stream_completion(
-            session,
-            prompt_override=messages,
-            context_length=context_lengths.get(session.model),
-        ):
-            kind = chunk["type"]
-            if kind == "delta":
-                text += chunk["text"]
+
+        for index in range(total):
+            if multi:
                 await queue.put(
-                    {
+                    {"event": "repeat_start", "session": label, "repeat": index, "repeats": total}
+                )
+
+            text = ""
+            final_metrics: dict | None = None
+            broken = False
+            async for chunk in stream_completion(
+                session,
+                prompt_override=messages,
+                context_length=context_lengths.get(session.model),
+            ):
+                kind = chunk["type"]
+                if kind == "delta":
+                    text += chunk["text"]
+                    event = {
                         "event": "delta",
                         "session": label,
                         "text": chunk["text"],
                         "metrics": chunk["metrics"],
                     }
-                )
-            elif kind == "metrics":
-                await queue.put(
-                    {"event": "metrics", "session": label, "metrics": chunk["metrics"]}
-                )
-            elif kind == "error":
-                failure = chunk["message"]
-                await queue.put(
-                    {
-                        "event": "session_error",
+                    if multi:
+                        event["repeat"] = index
+                    await queue.put(event)
+                elif kind == "metrics":
+                    event = {"event": "metrics", "session": label, "metrics": chunk["metrics"]}
+                    if multi:
+                        event["repeat"] = index
+                    await queue.put(event)
+                elif kind == "error":
+                    broken = True
+                    failure = chunk["message"]
+                    # Упавший прогон не отменяет остальные: серия идёт дальше,
+                    # а колонка остаётся живой, если хоть один прогон удался.
+                    event = {
+                        "event": "repeat_error" if multi else "session_error",
                         "session": label,
                         "message": chunk["message"],
                         "metrics": chunk["metrics"],
                     }
-                )
-            elif kind == "done":
-                text = chunk["text"]
-                final_metrics = chunk["metrics"]
+                    if multi:
+                        event["repeat"] = index
+                    await queue.put(event)
+                elif kind == "done":
+                    text = chunk["text"]
+                    final_metrics = chunk["metrics"]
+
+            if not broken:
+                texts.append(text)
+                last_metrics = final_metrics or last_metrics
+                if multi:
+                    await queue.put(
+                        {
+                            "event": "repeat_done",
+                            "session": label,
+                            "repeat": index,
+                            "text": text,
+                            "metrics": final_metrics,
+                        }
+                    )
 
         outcome = _Outcome(
-            text=text,
-            ok=failure is None,
-            finish_reason=(final_metrics or {}).get("finish_reason"),
+            text=texts[-1] if texts else "",
+            texts=list(texts),
+            ok=bool(texts),
+            finish_reason=(last_metrics or {}).get("finish_reason"),
             error=failure,
-            metrics=final_metrics,
+            metrics=last_metrics,
         )
-        # Финальные текст и метрики приезжают этим же событием: колонка
-        # заканчивается ровно одним вызовом.
-        await queue.put(
-            {"event": "session_done", "session": label, "text": text, "metrics": final_metrics}
-        )
+        # Финальные текст и метрики приезжают этим же событием. Для серии
+        # это последний удавшийся прогон, а полный список ответов и доля
+        # уникальных едут рядом — сумму по серии клиент считает по repeat_done.
+        done_event = {
+            "event": "session_done",
+            "session": label,
+            "text": outcome.text,
+            "metrics": last_metrics,
+        }
+        if multi:
+            done_event["repeats"] = total
+            done_event["texts"] = list(texts)
+            done_event["unique"] = len({t.strip() for t in texts})
+        await queue.put(done_event)
     except MissingKeyError as exc:
         outcome = _Outcome(error=str(exc))
         await queue.put({"event": "session_error", "session": label, "message": str(exc)})
@@ -501,6 +557,21 @@ def _judge_column_params(session: Session) -> str:
     return ", ".join(parts)
 
 
+def _judge_column_answers(outcome: _Outcome) -> str:
+    """Судье уходят все ответы серии: без них не ответить про разнообразие."""
+    texts = [t.strip() for t in outcome.texts if t.strip()]
+    if len(texts) <= 1:
+        return "Ответ:\n" + (texts[0] if texts else "")
+    unique = len(set(texts))
+    head = (
+        f"Прогонов: {len(texts)}, уникальных ответов: {unique} из {len(texts)} "
+        "(совпадение считается по точному тексту).\n"
+        "Ответы по прогонам:"
+    )
+    body = "\n".join(f"--- прогон {i} ---\n{t}" for i, t in enumerate(texts, 1))
+    return f"{head}\n{body}"
+
+
 def _judge_column_metrics(outcome: _Outcome) -> str:
     metrics = outcome.metrics or {}
     elapsed = metrics.get("elapsed_ms")
@@ -515,7 +586,8 @@ def _judge_column_metrics(outcome: _Outcome) -> str:
         parts.append(f"стоимость ${cost:.6f}")
     if outcome.finish_reason:
         parts.append(f"finish_reason={outcome.finish_reason}")
-    return ", ".join(parts) or "метрик нет"
+    line = ", ".join(parts) or "метрик нет"
+    return f"{line} (последний прогон серии)" if len(outcome.texts) > 1 else line
 
 
 def _judge_messages(
@@ -547,8 +619,7 @@ def _judge_messages(
             + (f"Чем отличается: {session.note}\n" if session.note else "")
             + f"Параметры: {_judge_column_params(session)}\n"
             + f"Метрики: {_judge_column_metrics(outcome)}\n"
-            + "Ответ:\n"
-            + outcome.text.strip()
+            + _judge_column_answers(outcome)
             + "\n"
         )
     return [

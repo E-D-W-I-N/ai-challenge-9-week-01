@@ -292,6 +292,32 @@ button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(
 .stat .v.length { color: var(--warn); }
 .stat .v.err { color: var(--bad); }
 
+/* Серия прогонов: подпись под панелью метрик, доля уникальных ответов
+   и метрики каждого прогона прямо под его ответом. */
+.stats-note {
+  flex: 0 0 auto;
+  padding: 6px 14px 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--muted);
+  background: var(--panel-2);
+}
+.uniq {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--accent);
+}
+.repeat-metrics {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.msg .body.failed { color: var(--bad); }
+
 .column .status { flex: 0 0 auto; padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
 .column .status.waiting { color: var(--warn); }
 .column .status.error { color: var(--bad); }
