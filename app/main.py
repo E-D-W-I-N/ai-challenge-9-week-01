@@ -40,7 +40,6 @@ def _scenario_public(scenario: Scenario, day: str = "", day_title: str = "") -> 
         "day_title": day_title,
         "title": scenario.title,
         "description": scenario.description,
-        "watch_for": scenario.watch_for,
         "layout": scenario.layout,
         "sessions": [asdict(s) for s in scenario.sessions],
     }
@@ -595,11 +594,10 @@ def _judge_messages(
     scenario: Scenario, sessions: list[Session], results: dict[str, _Outcome]
 ) -> list[dict]:
     questions = "\n".join(f"{i}. {q}" for i, q in enumerate(scenario.judge_questions, 1))
-    # watch_for судье не уходит намеренно: это режиссёрская подсказка ведущему,
-    # в ней по замыслу написано, какая колонка что покажет и где ошибётся.
-    # Отдавать её судье — значит показывать ему ответ до того, как он посмотрит
-    # на данные, и заодно заставлять авторов дней портить поле, написанное
-    # для человека, ради чистоты вердикта.
+    # Судье уходят description сценария, вопросы дня и результаты колонок —
+    # но не промпты колонок и не разбор из day-NN/README.md. Разбор содержит
+    # эталонный ответ и предсказание, какая колонка ошибётся: отдать его
+    # судье — значит показать ему ответ до того, как он посмотрит на данные.
     blocks = [
         f"Сценарий: {scenario.title}",
         f"Что демонстрируем: {scenario.description}",
