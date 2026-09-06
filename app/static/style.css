@@ -151,34 +151,6 @@ button.start {
 button.start:hover:not(:disabled) { filter: brightness(1.08); }
 button.start:disabled { opacity: .5; cursor: default; }
 
-button.ghost {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color .15s ease, border-color .15s ease;
-}
-button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(--accent); }
-
-/* description и watch_for — свёрнуты по умолчанию, раскрываются кнопкой. */
-.about {
-  flex: 0 0 auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  max-height: 30vh;
-  overflow-y: auto;
-  animation: fade-in .18s ease;
-}
-.about p { margin: 0 0 8px; line-height: 1.55; font-size: 14px; }
-.about p:last-child { margin-bottom: 0; }
-.watch { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--accent); }
-
 /* --- колонки --- */
 
 .columns {
@@ -462,7 +434,7 @@ button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(
 @keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .msg, .about { animation: none; }
+  .msg { animation: none; }
   .chat { scroll-behavior: auto; }
 }
 
@@ -503,6 +475,5 @@ button.ghost:hover, button.ghost.active { color: var(--text); border-color: var(
   /* Одна колонка на экран: лента скроллится внутри, метрики и ввод видны. */
   .columns { flex-direction: column; overflow-y: auto; scroll-snap-type: y proximity; }
   .column { flex: 0 0 100%; scroll-snap-align: start; }
-  .about { max-height: 40vh; }
   .summary { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
 }
