@@ -148,10 +148,11 @@ def _sampling_fields(payload: dict, where: str = "") -> dict:
 def _parse_overrides(raw: str, sessions: list[Session]) -> dict[str, dict]:
     """Разбирает query-параметр overrides у /api/run.
 
-    Проверяет ввод тем же кодом, что и тело /api/chat: кривой ввод обязан
-    получить 400 с текстом, а не 500. До этой проверки список вместо объекта
-    ронял AttributeError, лишний ключ — TypeError в Session(**fields),
-    а «label» в патче молча переименовывал колонку.
+    Проверяет overrides тот же код, что и тело /api/chat, и проверок ровно
+    столько же: кривой ввод обязан получить 400 с текстом, а не 500. До этой
+    проверки список вместо объекта ронял AttributeError, лишний ключ —
+    TypeError в Session(**fields), а «label» в патче молча переименовывал
+    колонку.
     """
     if not raw:
         return {}
