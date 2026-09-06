@@ -50,7 +50,7 @@ function renderSidebar(data) {
   const list = $("#scenario-list");
   list.innerHTML = "";
   if (!data.scenarios.length) {
-    list.innerHTML = '<p class="empty-hint">Сценариев нет — ни одной day-*/scenario.py</p>';
+    list.innerHTML = '<p class="empty-hint">Сценариев нет — не нашлось ни одного файла day-*/scenario.py</p>';
     return;
   }
 
@@ -151,7 +151,7 @@ async function buildPickers(sc) {
     const res = await fetch("/api/models?" + params.toString());
     models = (await res.json()).models || [];
   } catch (e) {
-    box.innerHTML = '<span class="hint">каталог моделей недоступен, используются модели из сценария</span>';
+    box.innerHTML = '<span class="hint">каталог моделей недоступен — берём модели из сценария</span>';
     return;
   }
 
@@ -192,7 +192,7 @@ async function buildPickers(sc) {
 const STAT_FIELDS = [
   ["ttft_ms", "TTFT", fmtMs],
   ["tokens_per_second", "ток/с", (v) => (v ? v.toFixed(1) : "—")],
-  ["tokens_out", "сген. токенов", fmtNum],
+  ["tokens_out", "сгенерировано", fmtNum],
   ["elapsed_ms", "прошло", fmtMs],
   ["prompt_tokens", "prompt", fmtNum],
   ["completion_tokens", "completion", fmtNum],
@@ -206,8 +206,8 @@ const STAT_FIELDS = [
 
 const PLACEHOLDER = "{{depends_on}}";
 
-// Тело сообщения строится через textContent: промпт печатается как есть,
-// без интерпретации разметки. {{depends_on}} подсвечивается отдельным span.
+// Тело сообщения строим через textContent: промпт печатается как есть,
+// без интерпретации разметки. {{depends_on}} подсвечиваем отдельным span.
 function messageBody(content) {
   const body = document.createElement("div");
   body.className = "body";
@@ -748,7 +748,7 @@ function startRun() {
   state.source = source;
 
   // Поток принадлежит тому сценарию, на котором его запустили. Если он больше
-  // не текущий — его успели оборвать, и всё пришедшее по нему отбрасывается.
+  // не текущий — его успели оборвать, и всё пришедшее по нему отбрасываем.
   const isCurrent = () => state.source === source;
 
   // Обрыв потока EventSource сообщает без причины и без текста. Молчать здесь

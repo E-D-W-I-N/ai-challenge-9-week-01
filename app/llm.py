@@ -188,7 +188,7 @@ async def stream_completion(
                             if metrics.ttft_ms is None:
                                 metrics.ttft_ms = (now - started) * 1000
                             text_parts.append(piece)
-                            # оценка «на глаз» до прихода usage: ~4 символа на токен
+                            # оценка «на глаз», пока не пришёл usage: ~4 символа на токен
                             metrics.tokens_out = max(
                                 metrics.tokens_out + 1, len("".join(text_parts)) // 4
                             )

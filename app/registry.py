@@ -32,7 +32,7 @@ class Day:
     """Имя папки: "day-02"."""
 
     title: str
-    """Человекочитаемый заголовок для сайдбара: "День 02"."""
+    """Заголовок дня в сайдбаре: "День 02"."""
 
     scenarios: list[Scenario] = field(default_factory=list)
 
@@ -109,7 +109,7 @@ def _load_file(path: Path) -> list[Scenario] | None:
     module_name = f"_scenario_{day.replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        _fail(day, "не удалось создать spec")
+        _fail(day, "не удалось загрузить scenario.py: importlib не отдал spec")
         return None
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
